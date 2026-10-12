@@ -1,0 +1,9 @@
+C:/Users/Zacky/Desktop/iPop/build/Desktop_Qt_6_12_0_MinGW_64_bit_Debug/CMakeFiles/ipop.dir
+C:/Users/Zacky/Desktop/iPop/build/Desktop_Qt_6_12_0_MinGW_64_bit_Debug/CMakeFiles/edit_cache.dir
+C:/Users/Zacky/Desktop/iPop/build/Desktop_Qt_6_12_0_MinGW_64_bit_Debug/CMakeFiles/rebuild_cache.dir
+C:/Users/Zacky/Desktop/iPop/build/Desktop_Qt_6_12_0_MinGW_64_bit_Debug/CMakeFiles/list_install_components.dir
+C:/Users/Zacky/Desktop/iPop/build/Desktop_Qt_6_12_0_MinGW_64_bit_Debug/CMakeFiles/install.dir
+C:/Users/Zacky/Desktop/iPop/build/Desktop_Qt_6_12_0_MinGW_64_bit_Debug/CMakeFiles/install/local.dir
+C:/Users/Zacky/Desktop/iPop/build/Desktop_Qt_6_12_0_MinGW_64_bit_Debug/CMakeFiles/install/strip.dir
+C:/Users/Zacky/Desktop/iPop/build/Desktop_Qt_6_12_0_MinGW_64_bit_Debug/CMakeFiles/ipop_autogen_timestamp_deps.dir
+C:/Users/Zacky/Desktop/iPop/build/Desktop_Qt_6_12_0_MinGW_64_bit_Debug/CMakeFiles/ipop_autogen.dir

@@ -1,0 +1,3 @@
+C:\Qt\Tools\CMake_64\bin\cmake.exe -E rm -f CMakeFiles\ipop.dir/objects.a
+C:\Qt\Tools\mingw1310_64\bin\ar.exe qc CMakeFiles\ipop.dir/objects.a @CMakeFiles\ipop.dir\objects1.rsp
+C:\Qt\Tools\mingw1310_64\bin\g++.exe -g -Wl,--whole-archive CMakeFiles\ipop.dir/objects.a -Wl,--no-whole-archive -o ipop.exe -Wl,--out-implib,libipop.dll.a -Wl,--major-image-version,0,--minor-image-version,0 @CMakeFiles\ipop.dir\linkLibs.rsp
