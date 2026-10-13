@@ -50,29 +50,45 @@
 
 ## 🛠️ Requisitos de Compilación
 
-En sistemas Linux (Ubuntu, Debian, Fedora, Arch Linux, etc.):
+En sistemas Linux (Ubuntu, Debian, Fedora, Arch Linux, Void Linux, etc.):
 
 * **Compilador C++**: GCC 9+ o Clang 10+ (soporte C++17)
 * **CMake**: versión 3.16 o superior
-* **Qt 6**: `qt6-base-dev` (módulos Core, Gui, Widgets)
+* **Qt 6**: Módulos Core, Gui, Widgets y Multimedia (`qt6-base`, `qt6-multimedia`)
+* **FFmpeg**: Necesario para la compatibilidad y transcodificación de audio
 
 ### Instalación de dependencias:
 
 **Ubuntu / Debian:**
 ```bash
 sudo apt update
-sudo apt install build-essential cmake qt6-base-dev
+sudo apt install build-essential cmake qt6-base-dev qt6-multimedia-dev libqt6multimediawidgets6 ffmpeg
 ```
 
 **Arch Linux:**
 ```bash
-sudo pacman -S base-devel cmake qt6-base
+sudo pacman -S base-devel cmake qt6-base qt6-multimedia ffmpeg
 ```
 
 **Fedora:**
 ```bash
-sudo dnf install gcc-c++ cmake qt6-qtbase-devel
+sudo dnf install gcc-c++ cmake qt6-qtbase-devel qt6-qtmultimedia-devel ffmpeg
 ```
+
+**Void Linux:** *(créditos a lost)*
+```bash
+sudo xbps-install -S base-devel cmake qt6-base-devel qt6-multimedia-devel ffmpeg
+```
+
+> **Nota para Void Linux (créditos a lost):**
+> Si vas a ejecutar el script interactivo en Python (`run_ipop.py`), instala:
+> ```bash
+> sudo xbps-install -S python3 python3-PyQt6 ffmpeg
+> ```
+> Asegúrate de que tu usuario tenga permisos para acceder a las unidades USB/almacenamiento montadas:
+> ```bash
+> sudo usermod -aG storage $USER
+> ```
 
 ---
 
