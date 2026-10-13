@@ -1,5 +1,6 @@
 #include "ITunesDBReader.h"
 #include "ITunesHash58.h"
+#include "DeviceDetector.h"
 
 #include <QFile>
 #include <QDir>
@@ -40,7 +41,7 @@ namespace {
 
         const ushort* u16ptr = reinterpret_cast<const ushort*>(data.constData() + strStart);
         int charCount = static_cast<int>(strLenBytes / 2);
-        return QString::fromUtf16(u16ptr, charCount).trimmed();
+        return QString::fromUtf16(reinterpret_cast<const char16_t*>(u16ptr), charCount).trimmed();
     }
 
     QByteArray makeMhodString(uint32_t type, const QString& text) {
@@ -71,7 +72,7 @@ ITunesDBReader::ITunesDBReader(const QString& ipodMountPath)
 }
 
 QString ITunesDBReader::resolvePhysicalPath(const QString& mountPath, const QString& ipodPath) {
-    if (ipodPath.isEmpty()) return "";
+    if (ipodPath.isEmpty() || mountPath.isEmpty()) return "";
     QString clean = ipodPath;
     if (clean.startsWith(':')) {
         clean.remove(0, 1);
@@ -79,8 +80,20 @@ QString ITunesDBReader::resolvePhysicalPath(const QString& mountPath, const QStr
     QStringList parts = clean.split(':', Qt::SkipEmptyParts);
     QString relPath = parts.join('/');
 
+    // 1. Probar ruta directa (rápido en Windows y en Linux si el casing coincide)
     QDir dir(mountPath);
-    return dir.filePath(relPath);
+    QString direct = dir.filePath(relPath);
+    if (QFile::exists(direct)) {
+        return direct;
+    }
+
+    // 2. En Linux, si hay diferencias de mayúsculas/minúsculas, resolver insensiblemente
+    QString resolved = DeviceDetector::resolveCaseInsensitivePath(mountPath, parts);
+    if (!resolved.isEmpty() && QFile::exists(resolved)) {
+        return resolved;
+    }
+
+    return direct;
 }
 
 bool ITunesDBReader::removeTracksFromDatabase(const QString& dbPath, const QSet<uint32_t>& deleteUids, const QString& firewireGuid) {
@@ -641,13 +654,9 @@ void ITunesDBReader::flushVolumeBuffers(const QString& mountPath) {
 bool ITunesDBReader::read(QList<Playlist>& outPlaylists) {
     outPlaylists.clear();
 
-    QDir dir(m_mountPath);
-    QString dbPath = dir.filePath("iPod_Control/iTunes/iTunesDB");
-    if (!QFile::exists(dbPath)) {
-        dbPath = dir.filePath("ipod_control/itunes/itunesdb");
-    }
+    QString dbPath = DeviceDetector::resolveDatabasePath(m_mountPath);
 
-    if (QFile::exists(dbPath)) {
+    if (!dbPath.isEmpty() && QFile::exists(dbPath)) {
         if (parseBinaryDatabase(dbPath, outPlaylists)) {
             return true;
         }
@@ -826,10 +835,8 @@ void ITunesDBReader::scanFilesFallback(QList<Playlist>& outPlaylists) {
     library.name = "Música (Almacenamiento)";
     library.isMaster = true;
 
-    QDir musicDir(m_mountPath + "/iPod_Control/Music");
-    if (!musicDir.exists()) {
-        musicDir.setPath(m_mountPath + "/ipod_control/music");
-    }
+    QString musicPath = DeviceDetector::resolveMusicPath(m_mountPath);
+    QDir musicDir(musicPath);
 
     uint32_t idCounter = 1;
     if (musicDir.exists()) {

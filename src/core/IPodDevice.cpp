@@ -1,5 +1,6 @@
 #include "IPodDevice.h"
 #include "ITunesDBReader.h"
+#include "DeviceDetector.h"
 
 #include <QDir>
 #include <QDirIterator>
@@ -62,13 +63,31 @@ namespace {
         if (m.startsWith("M9829") || m.startsWith("M9830")) return "iPod Photo / Color";
         if (m.startsWith("M9160") || m.startsWith("M9436")) return "iPod Mini 1G";
         if (m.startsWith("M9800") || m.startsWith("M9801")) return "iPod Mini 2G";
-        if (m.startsWith("MA002") || m.startsWith("MA146") || m.startsWith("PA002") || m.startsWith("MA003")) return "iPod 5G / 5.5G (Video)";
-        if (m.startsWith("MB029") || m.startsWith("MB147") || m.startsWith("MB565") || m.startsWith("MC297")) return "iPod Classic (6G / 7G)";
-        if (m.startsWith("MA004") || m.startsWith("MA099") || m.startsWith("MA107")) return "iPod Nano 1G";
-        if (m.startsWith("MA477") || m.startsWith("MA426") || m.startsWith("MA428")) return "iPod Nano 2G";
-        if (m.startsWith("MA978") || m.startsWith("MB249") || m.startsWith("MB261")) return "iPod Nano 3G";
-        if (m.startsWith("MB598") || m.startsWith("MB754") || m.startsWith("MB903")) return "iPod Nano 4G";
-        if (m.startsWith("MC031") || m.startsWith("MC060") || m.startsWith("MC075")) return "iPod Nano 5G";
+        if (m.startsWith("MA002") || m.startsWith("MA146") || m.startsWith("PA002") || m.startsWith("MA003") ||
+            m.startsWith("MA147") || m.startsWith("PA147") || m.startsWith("MA444") || m.startsWith("MA446") ||
+            m.startsWith("MA448") || m.startsWith("MA450")) return "iPod 5G / 5.5G (Video)";
+        if (m.startsWith("MB029") || m.startsWith("MB147") || m.startsWith("MB565") || m.startsWith("MC297") ||
+            m.startsWith("MB145") || m.startsWith("MB150") || m.startsWith("MB562")) return "iPod Classic (6G / 7G)";
+        if (m.startsWith("MA004") || m.startsWith("MA099") || m.startsWith("MA107") || m.startsWith("MA005") ||
+            m.startsWith("MA112")) return "iPod Nano 1G";
+        if (m.startsWith("MA477") || m.startsWith("MA426") || m.startsWith("MA428") || m.startsWith("MA487") ||
+            m.startsWith("MA489") || m.startsWith("MA497")) return "iPod Nano 2G";
+        // Todos los modelos de iPod Nano 3G (Plata 4GB/8GB, Negro, Azul, Verde, Rojo, Rosa)
+        if (m.startsWith("MA978") || m.startsWith("MA980") ||
+            m.startsWith("MB249") || m.startsWith("MB251") ||
+            m.startsWith("MB261") || m.startsWith("MB263") ||
+            m.startsWith("MB245") || m.startsWith("MB247") ||
+            m.startsWith("MB253") || m.startsWith("MB255") ||
+            m.startsWith("MB257") || m.startsWith("MB259") ||
+            m.startsWith("MB343") || m.startsWith("MB345")) {
+            return "iPod Nano 3G";
+        }
+        if (m.startsWith("MB598") || m.startsWith("MB754") || m.startsWith("MB903") || m.startsWith("MB732") ||
+            m.startsWith("MB735") || m.startsWith("MB739") || m.startsWith("MB742") || m.startsWith("MB745") ||
+            m.startsWith("MB748") || m.startsWith("MB751")) return "iPod Nano 4G";
+        if (m.startsWith("MC031") || m.startsWith("MC060") || m.startsWith("MC075") || m.startsWith("MC027") ||
+            m.startsWith("MC037") || m.startsWith("MC040") || m.startsWith("MC043") || m.startsWith("MC046") ||
+            m.startsWith("MC049") || m.startsWith("MC050")) return "iPod Nano 5G";
         if (m.startsWith("MC525") || m.startsWith("MC688") || m.startsWith("MC694")) return "iPod Nano 6G";
         if (m.startsWith("MD481") || m.startsWith("ME971")) return "iPod Nano 7G";
         if (m.startsWith("M9724") || m.startsWith("M9725")) return "iPod Shuffle 1G";
@@ -82,20 +101,7 @@ namespace {
 IPodDevice::IPodDevice(const QString& mountPath)
     : m_mountPath(mountPath)
 {
-    QDir dir(mountPath);
-    if (!dir.exists()) {
-        m_isValid = false;
-        return;
-    }
-
-    QString controlPath = dir.filePath("iPod_Control");
-    QFileInfo checkInfo(controlPath);
-    if (!checkInfo.exists() || !checkInfo.isDir()) {
-        controlPath = dir.filePath("ipod_control");
-        checkInfo.setFile(controlPath);
-    }
-
-    m_isValid = checkInfo.exists() && checkInfo.isDir();
+    m_isValid = DeviceDetector::isIpodMount(mountPath);
     if (m_isValid) {
         parseSysInfo();
         loadPlaylists();
@@ -105,10 +111,9 @@ IPodDevice::IPodDevice(const QString& mountPath)
 }
 
 void IPodDevice::parseSysInfo() {
-    QDir dir(m_mountPath);
-    QString sysInfoPath = dir.filePath("iPod_Control/Device/SysInfo");
-    if (!QFile::exists(sysInfoPath)) {
-        sysInfoPath = dir.filePath("ipod_control/device/sysinfo");
+    QString sysInfoPath = DeviceDetector::resolveSysInfoPath(m_mountPath);
+    if (sysInfoPath.isEmpty() || !QFile::exists(sysInfoPath)) {
+        return;
     }
 
     QFile file(sysInfoPath);
@@ -132,7 +137,6 @@ void IPodDevice::parseSysInfo() {
     if (m_modelName == "iPod" && !m_generation.isEmpty()) {
         m_modelName = resolveIpodModel(m_generation);
     }
-}
 
 void IPodDevice::loadPlaylists() {
     ITunesDBReader reader(m_mountPath);
@@ -209,13 +213,8 @@ bool IPodDevice::deleteTracks(const QList<uint32_t>& trackIds, int playlistIndex
         progressCb(currentBytes, totalBytes, "Actualizando base de datos iTunesDB...");
     }
 
-    QDir dir(m_mountPath);
-    QString dbPath = dir.filePath("iPod_Control/iTunes/iTunesDB");
-    if (!QFile::exists(dbPath)) {
-        dbPath = dir.filePath("ipod_control/itunes/itunesdb");
-    }
-
-    if (QFile::exists(dbPath)) {
+    QString dbPath = DeviceDetector::resolveDatabasePath(m_mountPath);
+    if (!dbPath.isEmpty() && QFile::exists(dbPath)) {
         ITunesDBReader::removeTracksFromDatabase(dbPath, toDelete, m_serialNumber);
     }
 
@@ -238,9 +237,11 @@ bool IPodDevice::deleteTracks(const QList<uint32_t>& trackIds, int playlistIndex
 
 bool IPodDevice::deletePlaylists(const QList<int>& playlistIndices, QString* errorMsg) {
     if (!m_isValid || playlistIndices.isEmpty()) return false;
-    QDir dir(m_mountPath);
-    QString dbPath = dir.filePath("iPod_Control/iTunes/iTunesDB");
-    if (!QFile::exists(dbPath)) dbPath = dir.filePath("ipod_control/itunes/itunesdb");
+    QString dbPath = DeviceDetector::resolveDatabasePath(m_mountPath);
+    if (dbPath.isEmpty()) {
+        if (errorMsg) *errorMsg = "No se encontró la base de datos iTunesDB.";
+        return false;
+    }
 
     QSet<int> toDelete(playlistIndices.begin(), playlistIndices.end());
     bool ok = ITunesDBReader::deletePlaylistsFromDatabase(dbPath, toDelete, m_serialNumber);
@@ -254,9 +255,11 @@ bool IPodDevice::deletePlaylists(const QList<int>& playlistIndices, QString* err
 
 bool IPodDevice::renamePlaylist(int playlistIndex, const QString& newName, QString* errorMsg) {
     if (!m_isValid || playlistIndex <= 0) return false;
-    QDir dir(m_mountPath);
-    QString dbPath = dir.filePath("iPod_Control/iTunes/iTunesDB");
-    if (!QFile::exists(dbPath)) dbPath = dir.filePath("ipod_control/itunes/itunesdb");
+    QString dbPath = DeviceDetector::resolveDatabasePath(m_mountPath);
+    if (dbPath.isEmpty()) {
+        if (errorMsg) *errorMsg = "No se encontró la base de datos iTunesDB.";
+        return false;
+    }
 
     bool ok = ITunesDBReader::renamePlaylistInDatabase(dbPath, playlistIndex, newName, m_serialNumber);
     if (ok) {
@@ -269,9 +272,11 @@ bool IPodDevice::renamePlaylist(int playlistIndex, const QString& newName, QStri
 
 bool IPodDevice::createPlaylist(const QString& name, QString* errorMsg) {
     if (!m_isValid || name.trimmed().isEmpty()) return false;
-    QDir dir(m_mountPath);
-    QString dbPath = dir.filePath("iPod_Control/iTunes/iTunesDB");
-    if (!QFile::exists(dbPath)) dbPath = dir.filePath("ipod_control/itunes/itunesdb");
+    QString dbPath = DeviceDetector::resolveDatabasePath(m_mountPath);
+    if (dbPath.isEmpty()) {
+        if (errorMsg) *errorMsg = "No se encontró la base de datos iTunesDB.";
+        return false;
+    }
 
     bool ok = ITunesDBReader::createPlaylistInDatabase(dbPath, name, m_serialNumber);
     if (ok) {
@@ -317,8 +322,13 @@ void IPodDevice::scanStorageCategories() {
 
 int IPodDevice::defaultCapacityMahForModel(const QString& modelName, const QString& generation) {
     QString m = modelName.toUpper() + " " + generation.toUpper();
-    // iPod Nano 3G ("conejillo de indias") -> 400 mAh exactos
-    if (m.contains("NANO 3G") || m.contains("A978") || m.contains("B249") || m.contains("B261")) return 400;
+    // iPod Nano 3G (todos los colores: plata, negro, azul, verde, rojo, rosa) -> 400 mAh exactos
+    if (m.contains("NANO 3G") || m.contains("A978") || m.contains("A980") ||
+        m.contains("B249") || m.contains("B251") || m.contains("B261") || m.contains("B263") ||
+        m.contains("B245") || m.contains("B247") || m.contains("B253") || m.contains("B255") ||
+        m.contains("B257") || m.contains("B259") || m.contains("B343") || m.contains("B345")) {
+        return 400;
+    }
     if (m.contains("NANO 1G")) return 290;
     if (m.contains("NANO 2G")) return 330;
     if (m.contains("NANO 4G") || m.contains("NANO 5G")) return 240;
@@ -350,13 +360,9 @@ void IPodDevice::loadBatteryStateFromDisk() {
     m_battery.minVoltage = 3.35;
     m_battery.isCharging = true;
 
-    QDir dir(m_mountPath);
-    QString battPath = dir.filePath("iPod_Control/Device/.ipop_battery");
-    if (!QFile::exists(battPath)) {
-        battPath = dir.filePath("ipod_control/device/.ipop_battery");
-    }
+    QString battPath = DeviceDetector::resolveCaseInsensitivePath(m_mountPath, {"iPod_Control", "Device", ".ipop_battery"});
 
-    if (QFile::exists(battPath)) {
+    if (!battPath.isEmpty() && QFile::exists(battPath)) {
         QSettings settings(battPath, QSettings::IniFormat);
         m_battery.maxCapacityMah = settings.value("nominalCapacityMah", defCap).toInt();
         m_battery.maxVoltage = settings.value("maxVoltage", 4.20).toDouble();
@@ -389,10 +395,11 @@ void IPodDevice::loadBatteryStateFromDisk() {
 
 void IPodDevice::saveBatteryStateToDisk() {
     if (!m_isValid || m_mountPath.isEmpty()) return;
-    QDir dir(m_mountPath);
-    QString devDir = dir.filePath("iPod_Control/Device");
-    if (!QDir(devDir).exists()) {
-        devDir = dir.filePath("ipod_control/device");
+    QString devDir = DeviceDetector::resolveCaseInsensitivePath(m_mountPath, {"iPod_Control", "Device"});
+    if (devDir.isEmpty()) {
+        QString ctrl = DeviceDetector::resolveControlPath(m_mountPath);
+        devDir = QDir(ctrl).filePath("Device");
+        QDir().mkpath(devDir);
     }
     if (!QDir(devDir).exists()) return;
 

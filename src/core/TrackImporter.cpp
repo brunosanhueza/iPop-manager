@@ -2,6 +2,7 @@
 #include "AudioConverter.h"
 #include "ITunesDBReader.h"
 #include "ITunesHash58.h"
+#include "DeviceDetector.h"
 
 #include <QDir>
 #include <QFile>
@@ -99,10 +100,10 @@ namespace {
 }
 
 QString TrackImporter::allocateIpodPath(const QString& mountPath, const QString& extension, QString& outApplePath) {
-    QDir musicDir(mountPath);
-    QString musicRel = "iPod_Control/Music";
-    if (!musicDir.exists(musicRel)) {
-        musicDir.mkpath(musicRel);
+    QString musicPath = DeviceDetector::resolveMusicPath(mountPath);
+    QDir musicDir(musicPath);
+    if (!musicDir.exists()) {
+        musicDir.mkpath(".");
     }
 
     // Buscar la subcarpeta F00..F19 con menor cantidad de archivos
@@ -110,7 +111,7 @@ QString TrackImporter::allocateIpodPath(const QString& mountPath, const QString&
     int minFiles = 999999;
     for (int i = 0; i < 20; ++i) {
         QString fName = QString("F%1").arg(i, 2, 10, QChar('0'));
-        QDir sub(musicDir.filePath(musicRel + "/" + fName));
+        QDir sub(musicDir.filePath(fName));
         if (!sub.exists()) {
             sub.mkpath(".");
             bestF = i;
@@ -124,7 +125,7 @@ QString TrackImporter::allocateIpodPath(const QString& mountPath, const QString&
     }
 
     QString folderStr = QString("F%1").arg(bestF, 2, 10, QChar('0'));
-    QDir targetDir(musicDir.filePath(musicRel + "/" + folderStr));
+    QDir targetDir(musicDir.filePath(folderStr));
     targetDir.mkpath(".");
 
     // Generar nombre aleatorio de 4 letras mayúsculas
@@ -156,10 +157,9 @@ bool TrackImporter::importTracksToDevice(
 ) {
     if (sourceFilePaths.isEmpty() || mountPath.isEmpty()) return false;
 
-    QDir dir(mountPath);
-    QString dbPath = dir.filePath("iPod_Control/iTunes/iTunesDB");
-    if (!QFile::exists(dbPath)) {
-        dbPath = dir.filePath("ipod_control/itunes/itunesdb");
+    QString dbPath = DeviceDetector::resolveDatabasePath(mountPath);
+    if (dbPath.isEmpty() || !QFile::exists(dbPath)) {
+        return false;
     }
 
     uint64_t totalBytesToCopy = 0;
@@ -250,9 +250,6 @@ bool TrackImporter::insertTracksIntoDatabase(
     const int totalSize = data.size();
     uint32_t maxTrackId = 100;
 
-    int ds1Offset = -1;
-    int ds2Offset = -1;
-
     while (offset + 16 <= totalSize) {
         const char* tag = data.constData() + offset;
         if (std::memcmp(tag, "mhsd", 4) != 0) break;
@@ -262,7 +259,6 @@ bool TrackImporter::insertTracksIntoDatabase(
         int childOffset = offset + static_cast<int>(hdrLen);
 
         if (dsType == 1) {
-            ds1Offset = offset;
             if (childOffset + 12 <= totalSize) {
                 const char* mhltTag = data.constData() + childOffset;
                 if (std::memcmp(mhltTag, "mhlt", 4) == 0) {
@@ -280,8 +276,6 @@ bool TrackImporter::insertTracksIntoDatabase(
                     }
                 }
             }
-        } else if (dsType == 2) {
-            ds2Offset = offset;
         }
 
         if (totLen == 0) break;

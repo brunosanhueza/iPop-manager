@@ -1,4 +1,5 @@
 #include "ITunesHash58.h"
+#include "DeviceDetector.h"
 #include <QCryptographicHash>
 #include <QFile>
 #include <QTextStream>
@@ -82,12 +83,8 @@ static uint32_t lcm(uint32_t a, uint32_t b) {
 }
 
 QString ITunesHash58::readFirewireGuid(const QString& mountPath) {
-    QDir dir(mountPath);
-    QString sysInfoPath = dir.filePath("iPod_Control/Device/SysInfo");
-    if (!QFile::exists(sysInfoPath)) {
-        sysInfoPath = dir.filePath("ipod_control/device/sysinfo");
-    }
-    if (!QFile::exists(sysInfoPath)) return QString();
+    QString sysInfoPath = DeviceDetector::resolveSysInfoPath(mountPath);
+    if (sysInfoPath.isEmpty() || !QFile::exists(sysInfoPath)) return QString();
 
     QFile file(sysInfoPath);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) return QString();

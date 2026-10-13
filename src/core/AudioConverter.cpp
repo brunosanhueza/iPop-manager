@@ -8,12 +8,21 @@
 #include <QDateTime>
 #include <QDebug>
 
+#include <QStandardPaths>
+
 QString AudioConverter::findFFmpegBinary() {
+#if defined(Q_OS_WIN)
+    QString exeName = "ffmpeg.exe";
+#else
+    QString exeName = "ffmpeg";
+#endif
+
+    // 1. Binario empaquetado junto a la aplicación o en carpeta tools
     QStringList candidates = {
-        QDir(QCoreApplication::applicationDirPath()).filePath("tools/ffmpeg.exe"),
-        QDir::current().filePath("tools/ffmpeg.exe"),
-        QDir("C:/Users/Zacky/Desktop/iPop").filePath("tools/ffmpeg.exe"),
-        "ffmpeg"
+        QDir(QCoreApplication::applicationDirPath()).filePath("tools/" + exeName),
+        QDir(QCoreApplication::applicationDirPath()).filePath(exeName),
+        QDir::current().filePath("tools/" + exeName),
+        QDir::current().filePath(exeName)
     };
 
     for (const auto& path : candidates) {
@@ -22,13 +31,19 @@ QString AudioConverter::findFFmpegBinary() {
         }
     }
 
-    QString found = QProcessEnvironment::systemEnvironment().value("PATH");
-    for (const auto& dirStr : found.split(';')) {
-        QString testPath = QDir(dirStr).filePath("ffmpeg.exe");
-        if (QFile::exists(testPath)) {
-            return QDir::toNativeSeparators(testPath);
-        }
+    // 2. Buscar en el PATH del sistema de forma multiplataforma (Windows y Linux)
+    QString systemFfmpeg = QStandardPaths::findExecutable("ffmpeg");
+    if (!systemFfmpeg.isEmpty()) {
+        return systemFfmpeg;
     }
+
+#if defined(Q_OS_LINUX)
+    // 3. Rutas comunes en distribuciones de Linux (Arch, Pop!_OS, Ubuntu, Fedora)
+    QStringList linuxPaths = {"/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/bin/ffmpeg"};
+    for (const auto& lp : linuxPaths) {
+        if (QFile::exists(lp)) return lp;
+    }
+#endif
 
     return "ffmpeg";
 }

@@ -56,7 +56,15 @@ MainWindow::MainWindow(QWidget* parent)
         m_deviceCombo->blockSignals(true);
         m_deviceCombo->clear();
         if (mounts.isEmpty()) {
-            m_deviceCombo->addItem("Ningún iPod detectado automáticamente");
+            auto unmounted = DeviceDetector::detectUnmountedIpods();
+            if (!unmounted.isEmpty()) {
+                for (const auto& u : unmounted) {
+                    QString text = QString("🔌 %1 en %2 (Desmontado - clic para montar)").arg(u.label.isEmpty() ? u.model : u.label, u.deviceNode);
+                    m_deviceCombo->addItem(text, QString("unmounted:%1").arg(u.deviceNode));
+                }
+            } else {
+                m_deviceCombo->addItem("Ningún iPod detectado automáticamente");
+            }
         } else {
             for (const QString& m : mounts) {
                 IPodDevice dev(m);
@@ -452,7 +460,22 @@ void MainWindow::onBrowseCustomMount() {
     );
 
     if (!dir.isEmpty()) {
-        m_deviceCombo->addItem(QString("Manual: %1").arg(dir), dir);
+        QString target = dir;
+        // Si el usuario seleccionó una carpeta contenedora (ej. /media/matts o /run/media/matts)
+        // buscamos si inmediatamente dentro hay una carpeta con iPod montado
+        if (!DeviceDetector::isIpodMount(target)) {
+            QDir parentDir(target);
+            const QStringList subdirs = parentDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+            for (const QString& sub : subdirs) {
+                QString candidate = parentDir.filePath(sub);
+                if (DeviceDetector::isIpodMount(candidate)) {
+                    target = candidate;
+                    break;
+                }
+            }
+        }
+
+        m_deviceCombo->addItem(QString("Manual: %1").arg(target), target);
         m_deviceCombo->setCurrentIndex(m_deviceCombo->count() - 1);
     }
 }
@@ -462,6 +485,33 @@ void MainWindow::onDeviceSelected(int index) {
 
     QString mount = m_deviceCombo->itemData(index).toString();
     if (mount.isEmpty()) return;
+
+    if (mount.startsWith("unmounted:")) {
+        QString devNode = mount.mid(10);
+        auto reply = QMessageBox::question(
+            this,
+            "iPod detectado sin montar",
+            QString("Se detectó tu iPod en la partición %1, pero aún no está montado en el sistema operativo.\n\n"
+                    "¿Deseas que iPop lo monte automáticamente ahora con udisksctl?").arg(devNode),
+            QMessageBox::Yes | QMessageBox::No
+        );
+
+        if (reply == QMessageBox::Yes) {
+            QString newMount;
+            if (DeviceDetector::mountDeviceNode(devNode, &newMount)) {
+                statusBar()->showMessage(QString("iPod montado con éxito en %1").arg(newMount));
+                onRefreshDevices();
+                return;
+            } else {
+                QMessageBox::warning(
+                    this,
+                    "Error al montar",
+                    QString("No se pudo montar automáticamente %1.\nPuedes montarlo en tu terminal con:\n  udisksctl mount -b %1").arg(devNode)
+                );
+            }
+        }
+        return;
+    }
 
     statusBar()->showMessage(QString("Cargando iPod en %1...").arg(mount));
     m_currentDevice = std::make_unique<IPodDevice>(mount);

@@ -333,19 +333,44 @@ def update_itunesdb_hash58(db: bytearray, fwid_str: str) -> bool:
     db[88:108] = h2
     return True
 
+def find_case_insensitive_path(base_path: str, *parts) -> str:
+    current = base_path
+    for part in parts:
+        if not os.path.exists(current) or not os.path.isdir(current):
+            return ""
+        direct = os.path.join(current, part)
+        if os.path.exists(direct):
+            current = direct
+            continue
+        found = False
+        try:
+            for entry in os.listdir(current):
+                if entry.lower() == part.lower():
+                    current = os.path.join(current, entry)
+                    found = True
+                    break
+        except Exception:
+            return ""
+        if not found:
+            return ""
+    return current
+
+def is_ipod_mount(path: str) -> bool:
+    if not path or not os.path.exists(path):
+        return False
+    ctrl = find_case_insensitive_path(path, "iPod_Control")
+    return bool(ctrl and os.path.isdir(ctrl))
+
 def get_ipod_firewire_guid(mount_path: str) -> str:
-    for sub in ["iPod_Control", "ipod_control"]:
-        p = os.path.join(mount_path, sub, "Device", "SysInfo")
-        if not os.path.exists(p):
-            p = os.path.join(mount_path, sub, "device", "sysinfo")
-        if os.path.exists(p):
-            try:
-                with open(p, "r", encoding="utf-8", errors="ignore") as f:
-                    for line in f:
-                        if line.lower().startswith("firewireguid:"):
-                            return line.split(":", 1)[1].strip()
-            except Exception:
-                pass
+    p = find_case_insensitive_path(mount_path, "iPod_Control", "Device", "SysInfo")
+    if p and os.path.exists(p):
+        try:
+            with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    if line.lower().startswith("firewireguid:"):
+                        return line.split(":", 1)[1].strip()
+        except Exception:
+            pass
     return ""
 
 def flush_ipod_volume(mount_path: str):
@@ -979,12 +1004,53 @@ class MainWindow(QMainWindow):
         self.device_combo.clear()
 
         found = []
-        for letter in string.ascii_uppercase:
-            drive = f"{letter}:\\"
-            if os.path.exists(drive):
-                ctrl = os.path.join(drive, "iPod_Control")
-                if os.path.exists(ctrl) and os.path.isdir(ctrl):
+        if sys.platform == 'win32':
+            for letter in string.ascii_uppercase:
+                drive = f"{letter}:\\"
+                if is_ipod_mount(drive):
                     found.append((f"iPod ({drive})", drive))
+        else:
+            # 1. En Linux: Leer /proc/mounts
+            if os.path.exists("/proc/mounts"):
+                try:
+                    with open("/proc/mounts", "r", errors="ignore") as f:
+                        for line in f:
+                            parts = line.strip().split()
+                            if len(parts) >= 2:
+                                mnt = parts[1].replace("\\040", " ")
+                                if is_ipod_mount(mnt):
+                                    found.append((f"iPod ({mnt})", mnt))
+                except Exception:
+                    pass
+
+            # 2. Escaneo en /run/media, /media y /mnt (hasta profundidad 2)
+            for base in ["/run/media", "/media", "/mnt"]:
+                if os.path.exists(base):
+                    try:
+                        for d1 in os.listdir(base):
+                            p1 = os.path.join(base, d1)
+                            if is_ipod_mount(p1):
+                                found.append((f"iPod ({p1})", p1))
+                                continue
+                            if os.path.isdir(p1):
+                                try:
+                                    for d2 in os.listdir(p1):
+                                        p2 = os.path.join(p1, d2)
+                                        if is_ipod_mount(p2):
+                                            found.append((f"iPod ({p2})", p2))
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
+
+        # Eliminar duplicados manteniendo orden
+        unique_found = []
+        seen = set()
+        for lbl, p in found:
+            if p not in seen:
+                seen.add(p)
+                unique_found.append((lbl, p))
+        found = unique_found
 
         if not found:
             self.device_combo.addItem("Ningún iPod detectado (modo demostración)", "demo")
@@ -998,7 +1064,17 @@ class MainWindow(QMainWindow):
     def browse_mount(self):
         d = QFileDialog.getExistingDirectory(self, "Seleccionar carpeta del iPod")
         if d:
-            self.device_combo.addItem(f"Manual: {d}", d)
+            target = d
+            if not is_ipod_mount(target):
+                try:
+                    for sub in os.listdir(target):
+                        cand = os.path.join(target, sub)
+                        if is_ipod_mount(cand):
+                            target = cand
+                            break
+                except Exception:
+                    pass
+            self.device_combo.addItem(f"Manual: {target}", target)
             self.device_combo.setCurrentIndex(self.device_combo.count() - 1)
 
     def on_device_changed(self, idx):
@@ -1022,16 +1098,29 @@ class MainWindow(QMainWindow):
         self.cap_bar.set_storage(tot, audio, 0, 0, 0, 0, free)
 
     def load_real_device(self, mount_path: str):
-        # 1. Leer SysInfo de hardware
-        sysinfo_p = os.path.join(mount_path, "iPod_Control", "Device", "SysInfo")
+        # 1. Leer SysInfo de hardware de forma insensible a mayúsculas
+        sysinfo_p = find_case_insensitive_path(mount_path, "iPod_Control", "Device", "SysInfo")
         model = "iPod"
         sn = ""
-        if os.path.exists(sysinfo_p):
+        if sysinfo_p and os.path.exists(sysinfo_p):
             with open(sysinfo_p, "r", errors="ignore") as f:
                 for line in f:
                     if line.startswith("ModelNumStr:"):
                         model_num = line.split(":", 1)[1].strip()
-                        model = f"iPod Nano ({model_num})" if "A978" in model_num or "B249" in model_num else f"iPod ({model_num})"
+                        m_up = model_num.upper()
+                        nano_3g_codes = ["A978", "A980", "B249", "B251", "B261", "B263", "B245", "B247", "B253", "B255", "B257", "B259", "B343", "B345"]
+                        if any(k in m_up for k in nano_3g_codes):
+                            model = f"iPod Nano 3G ({model_num})"
+                        elif any(k in m_up for k in ["A004", "A099", "A107"]):
+                            model = f"iPod Nano 1G ({model_num})"
+                        elif any(k in m_up for k in ["A477", "A426", "A428"]):
+                            model = f"iPod Nano 2G ({model_num})"
+                        elif any(k in m_up for k in ["B598", "B754", "B903"]):
+                            model = f"iPod Nano 4G ({model_num})"
+                        elif any(k in m_up for k in ["C031", "C060", "C075"]):
+                            model = f"iPod Nano 5G ({model_num})"
+                        else:
+                            model = f"iPod ({model_num})"
                     elif line.startswith("FirewireGuid:"):
                         sn = line.split(":", 1)[1].strip()
 
@@ -1040,7 +1129,9 @@ class MainWindow(QMainWindow):
         self.batt_lbl.setText("⚡ 4.20 V (100% • 400 mAh)")
 
         # 2. Base de datos iTunesDB
-        itunesdb_p = os.path.join(mount_path, "iPod_Control", "iTunes", "iTunesDB")
+        itunesdb_p = find_case_insensitive_path(mount_path, "iPod_Control", "iTunes", "iTunesDB")
+        if not itunesdb_p:
+            itunesdb_p = os.path.join(mount_path, "iPod_Control", "iTunes", "iTunesDB")
         self.all_tracks, self.playlists = parse_itunesdb(itunesdb_p)
 
         # 3. Almacenamiento real
