@@ -403,6 +403,8 @@ CMakeFiles/ipop.dir/src/core/IPodDevice.cpp.obj: \
  C:/Qt/6.12.0/mingw_64/include/QtCore/QStorageInfo \
  C:/Qt/6.12.0/mingw_64/include/QtCore/qstorageinfo.h \
  C:/Qt/6.12.0/mingw_64/include/QtCore/QDebug \
+ C:/Qt/6.12.0/mingw_64/include/QtCore/QSettings \
+ C:/Qt/6.12.0/mingw_64/include/QtCore/qsettings.h \
  C:/Qt/6.12.0/mingw_64/include/QtCore/QProcess \
  C:/Qt/6.12.0/mingw_64/include/QtCore/qprocess.h \
  C:/Qt/Tools/mingw1310_64/x86_64-w64-mingw32/include/windows.h \

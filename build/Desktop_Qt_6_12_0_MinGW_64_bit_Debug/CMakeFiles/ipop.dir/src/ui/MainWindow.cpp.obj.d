@@ -567,6 +567,8 @@ CMakeFiles/ipop.dir/src/ui/MainWindow.cpp.obj: \
  C:/Qt/6.12.0/mingw_64/include/QtWidgets/QDialog \
  C:/Qt/6.12.0/mingw_64/include/QtWidgets/QProgressBar \
  C:/Qt/6.12.0/mingw_64/include/QtWidgets/qprogressbar.h \
+ C:/Qt/6.12.0/mingw_64/include/QtWidgets/QDoubleSpinBox \
+ C:/Qt/6.12.0/mingw_64/include/QtWidgets/qspinbox.h \
  C:/Users/Zacky/Desktop/iPop/src/core/AudioConverter.h \
  C:/Qt/6.12.0/mingw_64/include/QtCore/QFileInfo \
  C:/Users/Zacky/Desktop/iPop/src/core/TrackImporter.h \

@@ -10,6 +10,23 @@
 #include <QAudioOutput>
 #include "Track.h"
 
+class SeekSlider : public QSlider {
+    Q_OBJECT
+
+public:
+    explicit SeekSlider(Qt::Orientation orientation, QWidget* parent = nullptr);
+    ~SeekSlider() override = default;
+
+protected:
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+
+private:
+    int valueFromPosition(qreal x) const;
+    bool m_isDragging{false};
+};
+
 class ITunesPlayerWidget : public QWidget {
     Q_OBJECT
 
@@ -45,8 +62,8 @@ private slots:
 
 private:
     QString formatTime(qint64 ms) const;
+    QString formatRemainingTime(qint64 currentMs, qint64 totalMs) const;
     void updateLcdIdle();
-    void updateLcdTrack();
 
     QMediaPlayer* m_player{nullptr};
     QAudioOutput* m_audioOutput{nullptr};
@@ -59,10 +76,11 @@ private:
     QLabel* m_artistAlbumLabel{nullptr};
     QLabel* m_currentTimeLabel{nullptr};
     QLabel* m_totalTimeLabel{nullptr};
-    QSlider* m_timeSlider{nullptr};
-    QSlider* m_volumeSlider{nullptr};
+    SeekSlider* m_timeSlider{nullptr};
+    SeekSlider* m_volumeSlider{nullptr};
 
     Track m_currentTrack;
     bool m_isSliderSeeking{false};
+    qint64 m_targetSeekMs{-1};
     qint64 m_durationMs{0};
 };

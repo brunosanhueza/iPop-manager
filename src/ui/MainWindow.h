@@ -43,11 +43,14 @@ private slots:
     void onEditSelectedPlaylist();
     void onDeleteSelectedPlaylists();
     void onNewPlaylist();
+    void onUpdateBatteryTelemetry();
+    void onBatteryDiagnosticsClicked();
 
 protected:
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dragMoveEvent(QDragMoveEvent* event) override;
     void dropEvent(QDropEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     void setupUi();
@@ -70,6 +73,7 @@ private:
     bool m_allSelected{false};
     bool m_allPlaylistsChecked{false};
     QList<Track> m_activeTracks;
+    QTimer* m_batteryTimer{nullptr};
 
     // UI Widgets - Top Bar
     QComboBox* m_deviceCombo{nullptr};
@@ -105,3 +109,4 @@ private:
     QLabel* m_totalCapacityLabel{nullptr};
     QLabel* m_freeCapacityLabel{nullptr};
 };
+

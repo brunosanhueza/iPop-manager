@@ -40,11 +40,11 @@ void CapacityBar::paintEvent(QPaintEvent* /*event*/) {
     clipPath.addRoundedRect(barRect, radius, radius);
     painter.setClipPath(clipPath);
 
-    // Fondo gris oscuro elegante
-    painter.fillRect(barRect, QColor(45, 55, 72));
+    // Fondo base metálico suave estilo iTunes 10
+    painter.fillRect(barRect, QColor(218, 222, 228));
 
     if (m_breakdown.totalBytes == 0) {
-        painter.setPen(QColor(160, 174, 192));
+        painter.setPen(QColor(110, 118, 128));
         painter.drawText(barRect, Qt::AlignCenter, "Sin almacenamiento detectado");
         return;
     }
@@ -57,12 +57,18 @@ void CapacityBar::paintEvent(QPaintEvent* /*event*/) {
         QColor colorEnd;
     };
 
+    // Paleta oficial icónica de iTunes 10:
+    // Audio: Ámbar / Naranja brillante
+    // Video: Cian / Azul turquesa
+    // Podcasts: Púrpura / Violeta
+    // Fotos: Oro / Amarillo cálido
+    // Otros: Bronce / Gris pizarra
     QList<CatDef> defs = {
-        {FileCategory::Audio, "Música", m_breakdown.audioBytes, QColor(59, 130, 246), QColor(29, 78, 216)},
-        {FileCategory::Video, "Video", m_breakdown.videoBytes, QColor(6, 182, 212), QColor(14, 116, 144)},
-        {FileCategory::Podcasts, "Podcasts", m_breakdown.podcastBytes, QColor(168, 85, 247), QColor(126, 34, 206)},
-        {FileCategory::Photos, "Fotos", m_breakdown.photoBytes, QColor(245, 158, 11), QColor(180, 83, 9)},
-        {FileCategory::Other, "Otros", m_breakdown.otherBytes, QColor(239, 68, 68), QColor(185, 28, 28)}
+        {FileCategory::Audio, "Música", m_breakdown.audioBytes, QColor(255, 149, 0), QColor(224, 76, 0)},
+        {FileCategory::Video, "Video", m_breakdown.videoBytes, QColor(0, 190, 214), QColor(0, 126, 148)},
+        {FileCategory::Podcasts, "Podcasts", m_breakdown.podcastBytes, QColor(168, 62, 196), QColor(114, 24, 142)},
+        {FileCategory::Photos, "Fotos", m_breakdown.photoBytes, QColor(255, 198, 26), QColor(230, 150, 0)},
+        {FileCategory::Other, "Otros", m_breakdown.otherBytes, QColor(126, 142, 154), QColor(82, 98, 110)}
     };
 
     qreal currentX = 0.0;
@@ -80,6 +86,10 @@ void CapacityBar::paintEvent(QPaintEvent* /*event*/) {
         grad.setColorAt(1.0, item.colorEnd);
         painter.fillRect(segRect, grad);
 
+        // Separador sutil entre segmentos
+        painter.setPen(QColor(0, 0, 0, 45));
+        painter.drawLine(QPointF(currentX + segWidth, 0), QPointF(currentX + segWidth, h));
+
         // Almacenar el segmento para detección en mouseMoveEvent
         SegmentRect sr;
         sr.rect = segRect;
@@ -92,12 +102,12 @@ void CapacityBar::paintEvent(QPaintEvent* /*event*/) {
         currentX += segWidth;
     }
 
-    // El remanente es Espacio Libre
+    // El remanente es Espacio Libre (Gris metálico plateado de iTunes)
     if (m_breakdown.freeBytes > 0 && currentX < w) {
         QRectF freeRect(currentX, 0, w - currentX, h);
         QLinearGradient freeGrad(freeRect.topLeft(), freeRect.bottomLeft());
-        freeGrad.setColorAt(0.0, QColor(75, 85, 99));
-        freeGrad.setColorAt(1.0, QColor(55, 65, 81));
+        freeGrad.setColorAt(0.0, QColor(226, 230, 236));
+        freeGrad.setColorAt(1.0, QColor(194, 200, 208));
         painter.fillRect(freeRect, freeGrad);
 
         SegmentRect sr;
@@ -109,9 +119,16 @@ void CapacityBar::paintEvent(QPaintEvent* /*event*/) {
         m_segments.append(sr);
     }
 
-    // Borde exterior sutil
+    // Brillo de cristal / reflejo glossy característico de iTunes 10
+    QRectF glossRect(0, 0, w, h * 0.45);
+    QLinearGradient glossGrad(0, 0, 0, h * 0.45);
+    glossGrad.setColorAt(0.0, QColor(255, 255, 255, 130));
+    glossGrad.setColorAt(1.0, QColor(255, 255, 255, 25));
+    painter.fillRect(glossRect, glossGrad);
+
+    // Borde exterior metálico con bisel
     painter.setClipping(false);
-    painter.setPen(QPen(QColor(255, 255, 255, 30), 1.5));
+    painter.setPen(QPen(QColor(128, 134, 144), 1.2));
     painter.setBrush(Qt::NoBrush);
     painter.drawRoundedRect(barRect.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius);
 }

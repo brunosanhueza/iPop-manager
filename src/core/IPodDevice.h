@@ -39,9 +39,24 @@ struct StorageBreakdown {
 
 struct BatteryStatus {
     bool available{false};
-    int percentage{-1};      // 0 - 100%, -1 si se desconoce
-    bool isCharging{false};
-    QString stateString{"Desconocido"};
+    int percentage{100};            // 0 - 100%
+    double voltage{4.20};           // Voltaje actual de la celda (ej. 4.20 V)
+    double maxVoltage{4.20};        // Voltaje máximo de corte (4.20 V)
+    double minVoltage{3.35};        // Voltaje mínimo de corte seguro (3.35 V)
+    int currentMah{400};            // Capacidad actual en mAh
+    int maxCapacityMah{400};        // Capacidad nominal original en mAh
+    bool isCharging{true};          // Alimentado por USB
+    bool isProtectionCutoff{true};  // Corte de protección activo al 100%
+    QString stateString{"4.20 V (100% • 400 mAh)"};
+
+    QString shortLabel() const {
+        if (!available) return "Desconectado";
+        return QString("%1%2 V (%3% • %4 mAh)")
+            .arg(isCharging ? "⚡ " : "")
+            .arg(voltage, 0, 'f', 2)
+            .arg(percentage)
+            .arg(currentMah);
+    }
 };
 
 class IPodDevice {
@@ -62,6 +77,9 @@ public:
     // Batería
     BatteryStatus batteryStatus() const { return m_battery; }
     void refreshBatteryStatus();
+    void updateBatteryTelemetry(double deltaSeconds);
+    void calibrateBattery(double newVoltage, int newMah = -1);
+    static int defaultCapacityMahForModel(const QString& modelName, const QString& generation);
 
     // Playlists y canciones
     QList<Playlist> playlists() const { return m_playlists; }
@@ -82,6 +100,8 @@ public:
 private:
     void parseSysInfo();
     void scanStorageCategories();
+    void loadBatteryStateFromDisk();
+    void saveBatteryStateToDisk();
 
     QString m_mountPath;
     bool m_isValid{false};

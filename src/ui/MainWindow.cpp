@@ -21,6 +21,9 @@
 #include <QUrl>
 #include <QDirIterator>
 #include "DeleteProgressDialog.h"
+#include <QDialog>
+#include <QDoubleSpinBox>
+#include <QProgressBar>
 #include "../core/AudioConverter.h"
 #include "../core/TrackImporter.h"
 #include "../core/ITunesDBReader.h"
@@ -44,6 +47,10 @@ MainWindow::MainWindow(QWidget* parent)
     connect(itunesTimer, &QTimer::timeout, this, &MainWindow::checkITunesStatus);
     itunesTimer->start(2000);
     checkITunesStatus();
+
+    m_batteryTimer = new QTimer(this);
+    connect(m_batteryTimer, &QTimer::timeout, this, &MainWindow::onUpdateBatteryTelemetry);
+    m_batteryTimer->start(2000);
 
     connect(&m_detector, &DeviceDetector::devicesRefreshed, this, [this](const QStringList& mounts) {
         m_deviceCombo->blockSignals(true);
@@ -75,77 +82,114 @@ void MainWindow::setupUi() {
     setCentralWidget(centralWidget);
 
     auto* rootLayout = new QVBoxLayout(centralWidget);
-    rootLayout->setContentsMargins(16, 14, 16, 14);
-    rootLayout->setSpacing(12);
+    rootLayout->setContentsMargins(0, 0, 0, 0);
+    rootLayout->setSpacing(0);
 
-    // 1. Barra Superior: Selector de Dispositivo y Acciones
+    // 1. Barra Superior Integrada Estilo iTunes 10 (Metal Platino Cepillado)
     auto* topBar = new QFrame(this);
     topBar->setObjectName("topBar");
     topBar->setStyleSheet(
-        "#topBar { background-color: #1E293B; border-radius: 10px; padding: 6px 12px; }"
+        "#topBar { "
+        "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #EAEAEA, stop:0.5 #DFDFDF, stop:0.51 #D5D5D5, stop:1 #C8C8C8); "
+        "  border-bottom: 1px solid #9E9E9E; border-top: 1px solid #FDFDFD; "
+        "}"
     );
     auto* topLayout = new QHBoxLayout(topBar);
-    topLayout->setContentsMargins(10, 6, 10, 6);
-    topLayout->setSpacing(10);
+    topLayout->setContentsMargins(10, 4, 10, 4);
+    topLayout->setSpacing(8);
 
-    auto* brandLabel = new QLabel("iPop", this);
-    brandLabel->setStyleSheet("font-size: 20px; font-weight: bold; color: #38BDF8; letter-spacing: 1px;");
-    topLayout->addWidget(brandLabel);
+    // 1.1 Reproductor Integrado (Transporte ⏮ ▶ ⏭ + Volumen 🔈 —●— 🔊 + LCD Central)
+    m_playerWidget = new ITunesPlayerWidget(this);
+    connect(m_playerWidget, &ITunesPlayerWidget::requestNextTrack, this, &MainWindow::onPlayerNextTrack);
+    connect(m_playerWidget, &ITunesPlayerWidget::requestPreviousTrack, this, &MainWindow::onPlayerPrevTrack);
+    topLayout->addWidget(m_playerWidget, 1);
 
-    topLayout->addSpacing(12);
+    // 1.2 Zona Derecha: Selector de iPod y Búsqueda
+    auto* rightControls = new QHBoxLayout();
+    rightControls->setSpacing(5);
 
-    auto* selectLabel = new QLabel("iPod:", this);
-    selectLabel->setStyleSheet("color: #94A3B8; font-weight: 500;");
-    topLayout->addWidget(selectLabel);
+    auto* devIcon = new QLabel("📱", this);
+    devIcon->setStyleSheet("font-size: 15px;");
+    rightControls->addWidget(devIcon);
 
     m_deviceCombo = new QComboBox(this);
-    m_deviceCombo->setMinimumWidth(340);
+    m_deviceCombo->setMinimumWidth(160);
+    m_deviceCombo->setMaximumWidth(220);
     m_deviceCombo->setStyleSheet(
-        "QComboBox { background-color: #0F172A; color: #F8FAFC; border: 1px solid #334155; "
-        "border-radius: 6px; padding: 6px 12px; font-size: 13px; } "
+        "QComboBox { "
+        "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #FFFFFF, stop:0.5 #EEEEEE, stop:0.51 #E0E0E0, stop:1 #D2D2D2); "
+        "  border: 1px solid #8E949C; border-radius: 4px; padding: 4px 8px; font-size: 11px; color: #222222; font-weight: 500; "
+        "} "
         "QComboBox::drop-down { border: none; } "
-        "QComboBox QAbstractItemView { background-color: #0F172A; color: #F8FAFC; selection-background-color: #2563EB; }"
+        "QComboBox QAbstractItemView { background-color: #FFFFFF; color: #222222; selection-background-color: #3875D7; selection-color: white; }"
     );
     connect(m_deviceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &MainWindow::onDeviceSelected);
-    topLayout->addWidget(m_deviceCombo, 1);
+    rightControls->addWidget(m_deviceCombo);
 
-    m_refreshBtn = new QPushButton("Refrescar", this);
+    m_refreshBtn = new QPushButton("⟳", this);
+    m_refreshBtn->setToolTip("Refrescar dispositivos");
+    m_refreshBtn->setFixedSize(28, 28);
     m_refreshBtn->setStyleSheet(
-        "QPushButton { background-color: #334155; color: #F8FAFC; border-radius: 6px; padding: 6px 14px; font-weight: 500; } "
-        "QPushButton:hover { background-color: #475569; }"
+        "QPushButton { "
+        "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #FDFDFD, stop:0.5 #EDEDED, stop:0.51 #E0E0E0, stop:1 #D0D0D0); "
+        "  border: 1px solid #8E949C; border-radius: 4px; color: #2E3338; font-size: 13px; font-weight: bold; "
+        "} "
+        "QPushButton:hover { border-color: #6A7078; background: #FFFFFF; } "
+        "QPushButton:pressed { background: #B5BAC0; }"
     );
     connect(m_refreshBtn, &QPushButton::clicked, this, &MainWindow::onRefreshDevices);
-    topLayout->addWidget(m_refreshBtn);
+    rightControls->addWidget(m_refreshBtn);
 
-    m_browseBtn = new QPushButton("Elegir carpeta...", this);
-    m_browseBtn->setStyleSheet(
-        "QPushButton { background-color: #334155; color: #F8FAFC; border-radius: 6px; padding: 6px 14px; font-weight: 500; } "
-        "QPushButton:hover { background-color: #475569; }"
-    );
+    m_browseBtn = new QPushButton("📁", this);
+    m_browseBtn->setToolTip("Elegir carpeta manual...");
+    m_browseBtn->setFixedSize(28, 28);
+    m_browseBtn->setStyleSheet(m_refreshBtn->styleSheet());
     connect(m_browseBtn, &QPushButton::clicked, this, &MainWindow::onBrowseCustomMount);
-    topLayout->addWidget(m_browseBtn);
+    rightControls->addWidget(m_browseBtn);
 
-    m_ejectBtn = new QPushButton("Expulsar", this);
+    m_ejectBtn = new QPushButton("⏏ Expulsar", this);
+    m_ejectBtn->setToolTip("Expulsar iPod con seguridad");
     m_ejectBtn->setStyleSheet(
-        "QPushButton { background-color: #DC2626; color: white; border-radius: 6px; padding: 6px 16px; font-weight: bold; } "
-        "QPushButton:hover { background-color: #B91C1C; }"
+        "QPushButton { "
+        "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #FDFDFD, stop:0.5 #EDEDED, stop:0.51 #E0E0E0, stop:1 #D0D0D0); "
+        "  border: 1px solid #8E949C; border-radius: 4px; color: #991B1B; padding: 4px 10px; font-size: 11px; font-weight: bold; "
+        "} "
+        "QPushButton:hover { background: #FFFFFF; border-color: #DC2626; color: #DC2626; } "
+        "QPushButton:pressed { background: #B5BAC0; } "
+        "QPushButton:disabled { color: #A0A5AD; border-color: #CCD0D6; background: #E2E5E8; }"
     );
     connect(m_ejectBtn, &QPushButton::clicked, this, &MainWindow::onEjectDevice);
-    topLayout->addWidget(m_ejectBtn);
+    rightControls->addWidget(m_ejectBtn);
 
+    // Barra de búsqueda rápida estilo píldora de iTunes 10
+    m_searchEdit = new QLineEdit(this);
+    m_searchEdit->setPlaceholderText("🔍 Buscar...");
+    m_searchEdit->setClearButtonEnabled(true);
+    m_searchEdit->setFixedWidth(160);
+    m_searchEdit->setStyleSheet(
+        "QLineEdit { "
+        "  background-color: #FFFFFF; color: #222222; border: 1px solid #8E949C; "
+        "  border-radius: 12px; padding: 3px 10px; font-size: 11px; "
+        "} "
+        "QLineEdit:focus { border: 1px solid #3875D7; }"
+    );
+    connect(m_searchEdit, &QLineEdit::textChanged, this, &MainWindow::onFilterTracks);
+    rightControls->addWidget(m_searchEdit);
+
+    topLayout->addLayout(rightControls);
     rootLayout->addWidget(topBar);
 
     // Banner de advertencia de conflicto con iTunes
     m_itunesWarningFrame = new QFrame(this);
-    m_itunesWarningFrame->setStyleSheet("background-color: #7C2D12; border: 1px solid #EA580C; border-radius: 8px; padding: 6px 12px;");
+    m_itunesWarningFrame->setStyleSheet("background-color: #FEF3C7; border-bottom: 1px solid #F59E0B; padding: 4px 12px;");
     auto* warnLayout = new QHBoxLayout(m_itunesWarningFrame);
     warnLayout->setContentsMargins(10, 4, 10, 4);
     warnLayout->setSpacing(10);
-    auto* warnLabel = new QLabel("⚠️ iTunes está abierto en segundo plano. iTunes mantiene la base de datos en RAM y no detecta cambios externos ni vacía los archivos borrados.", m_itunesWarningFrame);
-    warnLabel->setStyleSheet("color: #FFEDD5; font-size: 12px; font-weight: 500;");
+    auto* warnLabel = new QLabel("⚠️ iTunes está abierto en segundo plano. iTunes mantiene la base de datos en RAM y podría sobrescribir cambios externos.", m_itunesWarningFrame);
+    warnLabel->setStyleSheet("color: #92400E; font-size: 11px; font-weight: 500;");
     warnLayout->addWidget(warnLabel, 1);
     auto* closeItunesBtn = new QPushButton("Cerrar iTunes", m_itunesWarningFrame);
-    closeItunesBtn->setStyleSheet("background-color: #DC2626; color: white; border-radius: 4px; padding: 4px 12px; font-weight: bold; font-size: 11px;");
+    closeItunesBtn->setStyleSheet("background-color: #DC2626; color: white; border-radius: 3px; padding: 3px 10px; font-weight: bold; font-size: 11px;");
     connect(closeItunesBtn, &QPushButton::clicked, this, [this]() {
         killITunesProcess();
         checkITunesStatus();
@@ -154,70 +198,59 @@ void MainWindow::setupUi() {
     m_itunesWarningFrame->setVisible(false);
     rootLayout->addWidget(m_itunesWarningFrame);
 
-    // 1.5 Reproductor de Medios Integrado (Estilo iTunes)
-    m_playerWidget = new ITunesPlayerWidget(this);
-    connect(m_playerWidget, &ITunesPlayerWidget::requestNextTrack, this, &MainWindow::onPlayerNextTrack);
-    connect(m_playerWidget, &ITunesPlayerWidget::requestPreviousTrack, this, &MainWindow::onPlayerPrevTrack);
-    rootLayout->addWidget(m_playerWidget);
-
-    // 2. Zona Central: Organizador de Carpetas / Ficheros (Árbol) a la izquierda y Tabla de Canciones a la derecha
+    // 2. Zona Central: Sidebar Izquierda (Fuente iTunes 10) y Panel Derecho (Canciones)
     auto* splitter = new QSplitter(Qt::Horizontal, this);
-    splitter->setHandleWidth(4);
-    splitter->setStyleSheet("QSplitter::handle { background-color: #334155; }");
+    splitter->setHandleWidth(1);
+    splitter->setStyleSheet("QSplitter::handle { background-color: #B4B9C0; }");
 
-    // 2.1 Sidebar Izquierda: Árbol Organizador (Estilo iTunes / Gestor de Archivos)
+    // 2.1 Sidebar Izquierda (Color Clásico Fuente iTunes 10 #DCE2EA)
     auto* treeWidget = new QFrame(this);
-    treeWidget->setStyleSheet("background-color: #1E293B; border-radius: 10px;");
+    treeWidget->setStyleSheet("background-color: #DCE2EA; border-right: 1px solid #B4B9C0; border-radius: 0px;");
     auto* treeLayout = new QVBoxLayout(treeWidget);
-    treeLayout->setContentsMargins(10, 12, 10, 12);
-    treeLayout->setSpacing(8);
+    treeLayout->setContentsMargins(8, 10, 8, 10);
+    treeLayout->setSpacing(6);
 
     auto* treeHeader = new QLabel("EXPLORADOR DEL DISPOSITIVO", this);
-    treeHeader->setStyleSheet("color: #64748B; font-size: 11px; font-weight: bold; letter-spacing: 1px; padding-left: 6px;");
+    treeHeader->setStyleSheet("color: #637080; font-size: 10px; font-weight: bold; letter-spacing: 1px; padding-left: 4px;");
     treeLayout->addWidget(treeHeader);
 
-    // Barra de acciones para listas de reproducción
+    // Barra de acciones para listas de reproducción (Botones estilo iTunes Platino)
     auto* plToolsGrid = new QGridLayout();
-    plToolsGrid->setSpacing(6);
+    plToolsGrid->setSpacing(4);
     plToolsGrid->setContentsMargins(2, 0, 2, 4);
+
+    QString plBtnStyle =
+        "QPushButton { "
+        "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #FDFDFD, stop:0.5 #EDEDED, stop:0.51 #E0E0E0, stop:1 #D0D0D0); "
+        "  border: 1px solid #8E949C; border-radius: 3px; padding: 4px 6px; font-size: 11px; font-weight: 500; color: #2E3338; "
+        "} "
+        "QPushButton:hover { background: #FFFFFF; border-color: #6A7078; } "
+        "QPushButton:pressed { background: #B5BAC0; } "
+        "QPushButton:disabled { background: #E2E5E8; color: #989EA6; border-color: #CCD0D6; }";
 
     m_newPlBtn = new QPushButton("➕ Nueva", this);
     m_newPlBtn->setToolTip("Crear una nueva lista de reproducción en el iPod");
-    m_newPlBtn->setStyleSheet(
-        "QPushButton { background-color: #334155; color: #F8FAFC; border-radius: 6px; padding: 5px 8px; font-size: 11px; font-weight: 500; } "
-        "QPushButton:hover { background-color: #475569; }"
-    );
+    m_newPlBtn->setStyleSheet(plBtnStyle);
     connect(m_newPlBtn, &QPushButton::clicked, this, &MainWindow::onNewPlaylist);
     plToolsGrid->addWidget(m_newPlBtn, 0, 0);
 
     m_selectAllPlBtn = new QPushButton("☑️ Todas", this);
     m_selectAllPlBtn->setToolTip("Seleccionar o deseleccionar todas las listas de reproducción");
-    m_selectAllPlBtn->setStyleSheet(
-        "QPushButton { background-color: #334155; color: #F8FAFC; border-radius: 6px; padding: 5px 8px; font-size: 11px; font-weight: 500; } "
-        "QPushButton:hover { background-color: #475569; }"
-    );
+    m_selectAllPlBtn->setStyleSheet(plBtnStyle);
     connect(m_selectAllPlBtn, &QPushButton::clicked, this, &MainWindow::onToggleSelectAllPlaylists);
     plToolsGrid->addWidget(m_selectAllPlBtn, 0, 1);
 
     m_editPlBtn = new QPushButton("✏️ Editar", this);
     m_editPlBtn->setToolTip("Editar o renombrar la lista (habilitado si seleccionas exactamente una lista)");
     m_editPlBtn->setEnabled(false);
-    m_editPlBtn->setStyleSheet(
-        "QPushButton { background-color: #1E293B; color: #475569; border: 1px solid #334155; border-radius: 6px; padding: 5px 8px; font-size: 11px; font-weight: 500; } "
-        "QPushButton:hover { background-color: #475569; color: white; } "
-        "QPushButton:disabled { background-color: #1E293B; color: #475569; border: 1px solid #334155; }"
-    );
+    m_editPlBtn->setStyleSheet(plBtnStyle);
     connect(m_editPlBtn, &QPushButton::clicked, this, &MainWindow::onEditSelectedPlaylist);
     plToolsGrid->addWidget(m_editPlBtn, 1, 0);
 
     m_deletePlBtn = new QPushButton("🗑️ Eliminar", this);
     m_deletePlBtn->setToolTip("Eliminar las listas de reproducción seleccionadas");
     m_deletePlBtn->setEnabled(false);
-    m_deletePlBtn->setStyleSheet(
-        "QPushButton { background-color: #1E293B; color: #475569; border: 1px solid #334155; border-radius: 6px; padding: 5px 8px; font-size: 11px; font-weight: 500; } "
-        "QPushButton:hover { background-color: #B91C1C; color: white; } "
-        "QPushButton:disabled { background-color: #1E293B; color: #475569; border: 1px solid #334155; }"
-    );
+    m_deletePlBtn->setStyleSheet(plBtnStyle);
     connect(m_deletePlBtn, &QPushButton::clicked, this, &MainWindow::onDeleteSelectedPlaylists);
     plToolsGrid->addWidget(m_deletePlBtn, 1, 1);
 
@@ -228,13 +261,13 @@ void MainWindow::setupUi() {
     m_treeOrganizer->setAnimated(true);
     m_treeOrganizer->setContextMenuPolicy(Qt::CustomContextMenu);
     m_treeOrganizer->setStyleSheet(
-        "QTreeWidget { background-color: transparent; border: none; color: #E2E8F0; font-size: 13px; } "
-        "QTreeWidget::item { padding: 6px 8px; border-radius: 6px; margin: 1px 0; } "
-        "QTreeWidget::item:hover { background-color: #334155; } "
-        "QTreeWidget::item:selected { background-color: #2563EB; color: white; font-weight: 500; } "
-        "QTreeWidget::indicator { width: 14px; height: 14px; border-radius: 3px; border: 1px solid #475569; background-color: #0F172A; } "
-        "QTreeWidget::indicator:hover { border: 1px solid #38BDF8; } "
-        "QTreeWidget::indicator:checked { background-color: #2563EB; border: 1px solid #38BDF8; }"
+        "QTreeWidget { background-color: transparent; border: none; color: #20242A; font-size: 12px; } "
+        "QTreeWidget::item { padding: 4px 6px; border-radius: 4px; margin: 1px 0; } "
+        "QTreeWidget::item:hover { background-color: #CCD3DC; } "
+        "QTreeWidget::item:selected { background-color: #3875D7; color: white; font-weight: bold; } "
+        "QTreeWidget::indicator { width: 13px; height: 13px; border-radius: 2px; border: 1px solid #7E8691; background-color: #FFFFFF; } "
+        "QTreeWidget::indicator:hover { border: 1px solid #3875D7; } "
+        "QTreeWidget::indicator:checked { background-color: #3875D7; border: 1px solid #2862BC; }"
     );
     connect(m_treeOrganizer, &QTreeWidget::itemClicked, this, &MainWindow::onTreeItemClicked);
     connect(m_treeOrganizer, &QTreeWidget::itemChanged, this, &MainWindow::onTreeItemChanged);
@@ -246,73 +279,55 @@ void MainWindow::setupUi() {
 
     splitter->addWidget(treeWidget);
     splitter->setStretchFactor(0, 0);
-    treeWidget->setMinimumWidth(240);
-    treeWidget->setMaximumWidth(320);
+    treeWidget->setMinimumWidth(230);
+    treeWidget->setMaximumWidth(300);
 
-    // 2.2 Panel de Canciones (Derecha)
+    // 2.2 Panel de Canciones (Derecha - Fondo Blanco Puro y Cebra Clásica)
     auto* songsWidget = new QFrame(this);
-    songsWidget->setStyleSheet("background-color: #1E293B; border-radius: 10px;");
+    songsWidget->setStyleSheet("background-color: #FFFFFF; border: none; border-radius: 0px;");
     auto* songsLayout = new QVBoxLayout(songsWidget);
-    songsLayout->setContentsMargins(16, 14, 16, 14);
-    songsLayout->setSpacing(10);
+    songsLayout->setContentsMargins(14, 12, 14, 12);
+    songsLayout->setSpacing(8);
 
     // Encabezado de la Vista Seleccionada
     auto* songsHeaderRow = new QHBoxLayout();
     auto* titleLayout = new QVBoxLayout();
-    titleLayout->setSpacing(2);
+    titleLayout->setSpacing(1);
 
     m_viewTitleLabel = new QLabel("Música", this);
-    m_viewTitleLabel->setStyleSheet("font-size: 20px; font-weight: bold; color: #F8FAFC;");
+    m_viewTitleLabel->setStyleSheet("font-size: 18px; font-weight: bold; color: #1E2228;");
     titleLayout->addWidget(m_viewTitleLabel);
 
     m_viewSummaryLabel = new QLabel("0 canciones", this);
-    m_viewSummaryLabel->setStyleSheet("color: #94A3B8; font-size: 12px;");
+    m_viewSummaryLabel->setStyleSheet("color: #646C76; font-size: 11px;");
     titleLayout->addWidget(m_viewSummaryLabel);
     songsHeaderRow->addLayout(titleLayout);
 
     songsHeaderRow->addStretch();
 
-    // Barra de búsqueda rápida
-    m_searchEdit = new QLineEdit(this);
-    m_searchEdit->setPlaceholderText("Buscar canción, artista o álbum...");
-    m_searchEdit->setClearButtonEnabled(true);
-    m_searchEdit->setFixedWidth(260);
-    m_searchEdit->setStyleSheet(
-        "QLineEdit { background-color: #0F172A; color: #F8FAFC; border: 1px solid #334155; "
-        "border-radius: 6px; padding: 6px 12px; font-size: 12px; } "
-        "QLineEdit:focus { border: 1px solid #38BDF8; }"
-    );
-    connect(m_searchEdit, &QLineEdit::textChanged, this, &MainWindow::onFilterTracks);
-    songsHeaderRow->addWidget(m_searchEdit);
-
-    songsLayout->addLayout(songsHeaderRow);
-
     // Barra de herramientas de canciones (Seleccionar todo / Eliminar)
-    auto* toolsRow = new QHBoxLayout();
-    toolsRow->setSpacing(10);
-
     m_selectAllBtn = new QPushButton("Seleccionar todas", this);
-    m_selectAllBtn->setStyleSheet(
-        "QPushButton { background-color: #334155; color: #F8FAFC; border-radius: 6px; padding: 6px 12px; font-size: 12px; font-weight: 500; } "
-        "QPushButton:hover { background-color: #475569; }"
-    );
+    m_selectAllBtn->setStyleSheet(plBtnStyle);
     connect(m_selectAllBtn, &QPushButton::clicked, this, &MainWindow::onToggleSelectAll);
-    toolsRow->addWidget(m_selectAllBtn);
+    songsHeaderRow->addWidget(m_selectAllBtn);
 
     m_deleteBtn = new QPushButton("Eliminar seleccionadas", this);
     m_deleteBtn->setEnabled(false);
     m_deleteBtn->setStyleSheet(
-        "QPushButton { background-color: #DC2626; color: white; border-radius: 6px; padding: 6px 14px; font-size: 12px; font-weight: bold; } "
-        "QPushButton:hover { background-color: #B91C1C; } "
-        "QPushButton:disabled { background-color: #475569; color: #94A3B8; }"
+        "QPushButton { "
+        "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #FDFDFD, stop:0.5 #EDEDED, stop:0.51 #E0E0E0, stop:1 #D0D0D0); "
+        "  border: 1px solid #8E949C; border-radius: 4px; padding: 4px 12px; font-size: 11px; font-weight: bold; color: #2E3338; "
+        "} "
+        "QPushButton:enabled { color: #B91C1C; } "
+        "QPushButton:enabled:hover { background: #DC2626; color: white; border-color: #B91C1C; } "
+        "QPushButton:disabled { background: #E2E5E8; color: #989EA6; border-color: #CCD0D6; }"
     );
     connect(m_deleteBtn, &QPushButton::clicked, this, &MainWindow::onDeleteSelectedTracks);
-    toolsRow->addWidget(m_deleteBtn);
+    songsHeaderRow->addWidget(m_deleteBtn);
 
-    toolsRow->addStretch();
-    songsLayout->addLayout(toolsRow);
+    songsLayout->addLayout(songsHeaderRow);
 
-    // Tabla de Canciones
+    // Tabla de Canciones Estilo iTunes 10 (Rayas de Cebra #FFFFFF y #F1F5FA)
     m_trackTable = new QTableView(this);
     m_trackModel = new TrackTableModel(this);
     m_trackTable->setModel(m_trackModel);
@@ -321,30 +336,35 @@ void MainWindow::setupUi() {
     m_trackTable->verticalHeader()->setVisible(false);
     m_trackTable->setShowGrid(false);
     m_trackTable->setStyleSheet(
-        "QTableView { background-color: #0F172A; alternate-background-color: #142036; "
-        "color: #F8FAFC; border: 1px solid #334155; border-radius: 6px; font-size: 13px; } "
-        "QTableView::item { padding: 6px; border: none; } "
-        "QTableView::item:selected { background-color: #2563EB; color: white; } "
-        "QHeaderView::section { background-color: #1E293B; color: #94A3B8; font-weight: 600; "
-        "font-size: 12px; padding: 6px; border: none; border-bottom: 1px solid #334155; }"
+        "QTableView { "
+        "  background-color: #FFFFFF; alternate-background-color: #F1F5FA; "
+        "  color: #20242A; border: 1px solid #C4C8D0; border-radius: 3px; font-size: 12px; "
+        "} "
+        "QTableView::item { padding: 4px 6px; border: none; } "
+        "QTableView::item:selected { background-color: #3875D7; color: white; } "
+        "QHeaderView::section { "
+        "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #EBEBEB, stop:1 #D4D4D4); "
+        "  color: #2E3338; font-weight: bold; font-size: 11px; padding: 4px 6px; border: none; "
+        "  border-right: 1px solid #C4C4C4; border-bottom: 1px solid #ACACAC; "
+        "}"
     );
 
     // Ajustar columnas
     m_trackTable->horizontalHeader()->setSectionResizeMode(TrackTableModel::ColCheck, QHeaderView::Fixed);
-    m_trackTable->setColumnWidth(TrackTableModel::ColCheck, 34);
+    m_trackTable->setColumnWidth(TrackTableModel::ColCheck, 32);
     m_trackTable->horizontalHeader()->setSectionResizeMode(TrackTableModel::ColTitle, QHeaderView::Stretch);
     m_trackTable->horizontalHeader()->setSectionResizeMode(TrackTableModel::ColArtist, QHeaderView::Interactive);
     m_trackTable->setColumnWidth(TrackTableModel::ColArtist, 170);
     m_trackTable->horizontalHeader()->setSectionResizeMode(TrackTableModel::ColAlbum, QHeaderView::Interactive);
     m_trackTable->setColumnWidth(TrackTableModel::ColAlbum, 170);
     m_trackTable->horizontalHeader()->setSectionResizeMode(TrackTableModel::ColQuality, QHeaderView::Fixed);
-    m_trackTable->setColumnWidth(TrackTableModel::ColQuality, 90);
+    m_trackTable->setColumnWidth(TrackTableModel::ColQuality, 85);
     m_trackTable->horizontalHeader()->setSectionResizeMode(TrackTableModel::ColDuration, QHeaderView::Fixed);
-    m_trackTable->setColumnWidth(TrackTableModel::ColDuration, 75);
+    m_trackTable->setColumnWidth(TrackTableModel::ColDuration, 70);
     m_trackTable->horizontalHeader()->setSectionResizeMode(TrackTableModel::ColFormat, QHeaderView::Fixed);
-    m_trackTable->setColumnWidth(TrackTableModel::ColFormat, 75);
+    m_trackTable->setColumnWidth(TrackTableModel::ColFormat, 70);
     m_trackTable->horizontalHeader()->setSectionResizeMode(TrackTableModel::ColSize, QHeaderView::Fixed);
-    m_trackTable->setColumnWidth(TrackTableModel::ColSize, 85);
+    m_trackTable->setColumnWidth(TrackTableModel::ColSize, 80);
 
     connect(m_trackModel, &TrackTableModel::selectionChanged, this, &MainWindow::onSelectionChanged);
     connect(m_trackTable, &QTableView::doubleClicked, this, &MainWindow::onTrackDoubleClicked);
@@ -355,58 +375,67 @@ void MainWindow::setupUi() {
 
     rootLayout->addWidget(splitter, 1);
 
-    // 3. Panel Inferior: Resumen de Hardware, Batería y Barra de Almacenamiento estilo iTunes
+    // 3. Panel Inferior: Almacenamiento y Capacidad estilo iTunes 10
     auto* bottomCard = new QFrame(this);
-    bottomCard->setStyleSheet("background-color: #1E293B; border-radius: 10px; padding: 8px 14px;");
+    bottomCard->setObjectName("bottomCard");
+    bottomCard->setStyleSheet(
+        "#bottomCard { "
+        "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #EAEAEA, stop:0.5 #DFDFDF, stop:0.51 #D5D5D5, stop:1 #C8C8C8); "
+        "  border-top: 1px solid #9E9E9E; border-radius: 0px; padding: 5px 14px; "
+        "}"
+    );
     auto* bottomLayout = new QVBoxLayout(bottomCard);
-    bottomLayout->setContentsMargins(12, 6, 12, 6);
-    bottomLayout->setSpacing(6);
+    bottomLayout->setContentsMargins(8, 4, 8, 4);
+    bottomLayout->setSpacing(4);
 
     auto* bottomInfoRow = new QHBoxLayout();
-    bottomInfoRow->setSpacing(14);
+    bottomInfoRow->setSpacing(12);
 
     m_deviceIconLabel = new QLabel("📱", this);
-    m_deviceIconLabel->setStyleSheet("font-size: 24px;");
+    m_deviceIconLabel->setStyleSheet("font-size: 20px;");
     bottomInfoRow->addWidget(m_deviceIconLabel);
 
     m_modelLabel = new QLabel("Sin dispositivo", this);
-    m_modelLabel->setStyleSheet("font-size: 14px; font-weight: bold; color: #F8FAFC;");
+    m_modelLabel->setStyleSheet("font-size: 13px; font-weight: bold; color: #20242A;");
     bottomInfoRow->addWidget(m_modelLabel);
 
-    bottomInfoRow->addSpacing(10);
-
     m_serialLabel = new QLabel("", this);
-    m_serialLabel->setStyleSheet("color: #64748B; font-size: 12px;");
+    m_serialLabel->setStyleSheet("color: #646C76; font-size: 11px;");
     bottomInfoRow->addWidget(m_serialLabel);
 
     bottomInfoRow->addStretch();
 
     m_batteryIconLabel = new QLabel("🔋", this);
+    m_batteryIconLabel->setCursor(Qt::PointingHandCursor);
+    m_batteryIconLabel->installEventFilter(this);
     bottomInfoRow->addWidget(m_batteryIconLabel);
-    m_batteryLabel = new QLabel("100% (Cargando)", this);
-    m_batteryLabel->setStyleSheet("color: #10B981; font-weight: bold; font-size: 12px;");
+
+    m_batteryLabel = new QLabel("4.20 V (100% • 400 mAh)", this);
+    m_batteryLabel->setCursor(Qt::PointingHandCursor);
+    m_batteryLabel->installEventFilter(this);
+    m_batteryLabel->setStyleSheet("color: #15803D; font-weight: bold; font-size: 11px;");
     bottomInfoRow->addWidget(m_batteryLabel);
 
     bottomInfoRow->addSpacing(16);
 
     m_freeCapacityLabel = new QLabel("Libre: —", this);
-    m_freeCapacityLabel->setStyleSheet("color: #94A3B8; font-size: 12px;");
+    m_freeCapacityLabel->setStyleSheet("color: #555D66; font-size: 11px;");
     bottomInfoRow->addWidget(m_freeCapacityLabel);
 
     m_totalCapacityLabel = new QLabel("Total: —", this);
-    m_totalCapacityLabel->setStyleSheet("color: #E2E8F0; font-size: 12px; font-weight: bold;");
+    m_totalCapacityLabel->setStyleSheet("color: #20242A; font-size: 11px; font-weight: bold;");
     bottomInfoRow->addWidget(m_totalCapacityLabel);
 
     bottomLayout->addLayout(bottomInfoRow);
 
     m_capacityBar = new CapacityBar(this);
-    m_capacityBar->setFixedHeight(22);
+    m_capacityBar->setFixedHeight(20);
     bottomLayout->addWidget(m_capacityBar);
 
     rootLayout->addWidget(bottomCard);
 
     statusBar()->showMessage("Listo");
-    statusBar()->setStyleSheet("background-color: #0F172A; color: #64748B; font-size: 12px;");
+    statusBar()->setStyleSheet("background-color: #DFDFDF; color: #555D66; font-size: 11px; border-top: 1px solid #C0C0C0;");
 }
 
 void MainWindow::onRefreshDevices() {
@@ -667,8 +696,10 @@ void MainWindow::updateDeviceView() {
         m_modelLabel->setText("Ningún iPod seleccionado");
         m_serialLabel->setText("");
         m_batteryLabel->setText("Desconectado");
-        m_batteryLabel->setStyleSheet("color: #94A3B8; font-size: 12px;");
+        m_batteryLabel->setStyleSheet("color: #94A3B8; font-size: 11px;");
+        m_batteryLabel->setToolTip("");
         m_batteryIconLabel->setText("🔌");
+        m_batteryIconLabel->setToolTip("");
 
         m_capacityBar->setBreakdown(StorageBreakdown{});
         m_totalCapacityLabel->setText("Total: —");
@@ -683,14 +714,35 @@ void MainWindow::updateDeviceView() {
     m_modelLabel->setText(m_currentDevice->modelName());
     m_serialLabel->setText(m_currentDevice->serialNumber().isEmpty() ? "" : QString("SN: %1").arg(m_currentDevice->serialNumber()));
 
-    // Batería
+    // Batería (Telemetría de Voltaje y mAh Dinámica)
     BatteryStatus batt = m_currentDevice->batteryStatus();
-    if (batt.percentage >= 0) {
-        m_batteryLabel->setText(QString("%1% %2").arg(batt.percentage).arg(batt.isCharging ? "(Cargando)" : ""));
+    if (batt.available) {
+        m_batteryLabel->setText(batt.shortLabel());
         m_batteryIconLabel->setText(batt.isCharging ? "⚡" : "🔋");
-        m_batteryLabel->setStyleSheet("color: #10B981; font-weight: bold; font-size: 12px;");
+        m_batteryLabel->setStyleSheet(batt.isProtectionCutoff
+            ? "color: #15803D; font-weight: bold; font-size: 11px;"
+            : "color: #1D4ED8; font-weight: bold; font-size: 11px;");
+
+        QString tip = QString(
+            "<b>Telemetría de Batería — %1</b><br>"
+            "• Voltaje actual medido: <b>%2 V</b> (Máx: %3 V)<br>"
+            "• Carga acumulada: <b>%4 / %5 mAh (%6%)</b><br>"
+            "• Estado del circuito: <b>%7</b><br>"
+            "• Protección de sobretensión: <b>%8</b><br><br>"
+            "<i>Haz clic para calibrar con multímetro o ver diagnóstico</i>"
+        ).arg(m_currentDevice->modelName())
+         .arg(batt.voltage, 0, 'f', 2)
+         .arg(batt.maxVoltage, 0, 'f', 2)
+         .arg(batt.currentMah)
+         .arg(batt.maxCapacityMah)
+         .arg(batt.percentage)
+         .arg(batt.isProtectionCutoff ? "Alimentado por USB (Carga completa)" : "Cargando celda Li-Po por USB 5V")
+         .arg(batt.isProtectionCutoff ? "ACTIVO (Corte a 4.2V para evitar hinchazón)" : "En absorción de carga");
+
+        m_batteryLabel->setToolTip(tip);
+        m_batteryIconLabel->setToolTip(tip);
     } else {
-        m_batteryLabel->setText(batt.stateString);
+        m_batteryLabel->setText("Desconectado");
         m_batteryIconLabel->setText("🔋");
     }
 
@@ -1118,13 +1170,15 @@ void MainWindow::updatePlaylistActionButtons() {
         m_editPlBtn->setEnabled(canEdit);
         if (canEdit) {
             m_editPlBtn->setStyleSheet(
-                "QPushButton { background-color: #2563EB; color: white; border-radius: 6px; padding: 5px 8px; font-size: 11px; font-weight: bold; } "
-                "QPushButton:hover { background-color: #1D4ED8; }"
+                "QPushButton { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4E86E4, stop:1 #2762C6); "
+                "  color: white; border: 1px solid #1D4DB8; border-radius: 3px; padding: 4px 6px; font-size: 11px; font-weight: bold; } "
+                "QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #5C95F2, stop:1 #326ED4); } "
+                "QPushButton:pressed { background: #1E4E9E; }"
             );
         } else {
             m_editPlBtn->setStyleSheet(
-                "QPushButton { background-color: #1E293B; color: #475569; border: 1px solid #334155; border-radius: 6px; padding: 5px 8px; font-size: 11px; font-weight: 500; } "
-                "QPushButton:disabled { background-color: #1E293B; color: #475569; border: 1px solid #334155; }"
+                "QPushButton { background-color: #E2E5E8; color: #989EA6; border: 1px solid #CCD0D6; border-radius: 3px; padding: 4px 6px; font-size: 11px; } "
+                "QPushButton:disabled { background-color: #E2E5E8; color: #989EA6; border: 1px solid #CCD0D6; }"
             );
         }
     }
@@ -1140,14 +1194,16 @@ void MainWindow::updatePlaylistActionButtons() {
                 m_deletePlBtn->setText("🗑️ Eliminar");
             }
             m_deletePlBtn->setStyleSheet(
-                "QPushButton { background-color: #DC2626; color: white; border-radius: 6px; padding: 5px 8px; font-size: 11px; font-weight: bold; } "
-                "QPushButton:hover { background-color: #B91C1C; }"
+                "QPushButton { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #FDFDFD, stop:0.5 #EDEDED, stop:0.51 #DCDCDC, stop:1 #EDEDED); "
+                "  border: 1px solid #8E949C; border-radius: 3px; padding: 4px 6px; font-size: 11px; font-weight: bold; color: #B91C1C; } "
+                "QPushButton:hover { background: #DC2626; color: white; border-color: #B91C1C; } "
+                "QPushButton:pressed { background: #991B1B; color: white; }"
             );
         } else {
             m_deletePlBtn->setText("🗑️ Eliminar");
             m_deletePlBtn->setStyleSheet(
-                "QPushButton { background-color: #1E293B; color: #475569; border: 1px solid #334155; border-radius: 6px; padding: 5px 8px; font-size: 11px; font-weight: 500; } "
-                "QPushButton:disabled { background-color: #1E293B; color: #475569; border: 1px solid #334155; }"
+                "QPushButton { background-color: #E2E5E8; color: #989EA6; border: 1px solid #CCD0D6; border-radius: 3px; padding: 4px 6px; font-size: 11px; } "
+                "QPushButton:disabled { background-color: #E2E5E8; color: #989EA6; border: 1px solid #CCD0D6; }"
             );
         }
     }
@@ -1165,10 +1221,11 @@ void MainWindow::onTreeContextMenu(const QPoint& pos) {
     QTreeWidgetItem* item = m_treeOrganizer->itemAt(pos);
     QMenu menu(this);
     menu.setStyleSheet(
-        "QMenu { background-color: #1E293B; color: #F8FAFC; border: 1px solid #334155; padding: 4px; border-radius: 6px; font-size: 12px; } "
-        "QMenu::item { padding: 6px 20px 6px 12px; border-radius: 4px; } "
-        "QMenu::item:selected { background-color: #2563EB; color: white; } "
-        "QMenu::item:disabled { color: #64748B; }"
+        "QMenu { background-color: #F6F7F9; color: #22262C; border: 1px solid #9DA3AC; padding: 3px; border-radius: 4px; font-size: 12px; } "
+        "QMenu::item { padding: 5px 20px 5px 12px; border-radius: 3px; } "
+        "QMenu::item:selected { background-color: #3875D7; color: white; } "
+        "QMenu::item:disabled { color: #9AA0A8; } "
+        "QMenu::separator { height: 1px; background-color: #D2D5DA; margin: 3px 6px; }"
     );
 
     menu.addAction("➕ Nueva lista de reproducción...", this, &MainWindow::onNewPlaylist);
@@ -1361,6 +1418,174 @@ void MainWindow::onNewPlaylist() {
     } else {
         QMessageBox::warning(this, "Error", errorMsg.isEmpty() ? "No se pudo crear la nueva lista." : errorMsg);
     }
+}
+
+bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+    if ((watched == m_batteryLabel || watched == m_batteryIconLabel) && event->type() == QEvent::MouseButtonPress) {
+        onBatteryDiagnosticsClicked();
+        return true;
+    }
+    return QMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::onUpdateBatteryTelemetry() {
+    if (m_currentDevice && m_currentDevice->isValid()) {
+        m_currentDevice->updateBatteryTelemetry(2.0);
+        BatteryStatus batt = m_currentDevice->batteryStatus();
+        m_batteryLabel->setText(batt.shortLabel());
+        m_batteryIconLabel->setText(batt.isCharging ? "⚡" : "🔋");
+        m_batteryLabel->setStyleSheet(batt.isProtectionCutoff
+            ? "color: #15803D; font-weight: bold; font-size: 11px;"
+            : "color: #1D4ED8; font-weight: bold; font-size: 11px;");
+    }
+}
+
+void MainWindow::onBatteryDiagnosticsClicked() {
+    if (!m_currentDevice || !m_currentDevice->isValid()) {
+        QMessageBox::information(this, "Batería", "No hay ningún iPod conectado actualmente.");
+        return;
+    }
+
+    BatteryStatus batt = m_currentDevice->batteryStatus();
+
+    QDialog diag(this);
+    diag.setWindowTitle("Telemetría y Diagnóstico de Batería — " + m_currentDevice->modelName());
+    diag.setFixedWidth(440);
+    diag.setStyleSheet(
+        "QDialog { background-color: #EAECF0; color: #20242A; font-family: -apple-system, 'Segoe UI', sans-serif; } "
+        "QGroupBox { font-weight: bold; font-size: 11px; border: 1px solid #B4B9C0; border-radius: 6px; margin-top: 10px; padding: 10px; background: #FFFFFF; } "
+        "QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; left: 8px; color: #4A5058; } "
+        "QLabel { font-size: 12px; color: #20242A; } "
+        "QPushButton { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #FDFDFD, stop:1 #EDEDED); border: 1px solid #8E949C; border-radius: 4px; padding: 5px 12px; font-weight: bold; color: #2E3338; } "
+        "QPushButton:hover { background: #FFFFFF; border-color: #3875D7; } "
+        "QPushButton:pressed { background: #D5DADE; }"
+    );
+
+    auto* layout = new QVBoxLayout(&diag);
+    layout->setSpacing(12);
+
+    // Encabezado con Icono y Modelo
+    auto* headBox = new QHBoxLayout();
+    auto* iconLbl = new QLabel("🔋", &diag);
+    iconLbl->setStyleSheet("font-size: 32px;");
+    headBox->addWidget(iconLbl);
+
+    auto* titleBox = new QVBoxLayout();
+    auto* nameLbl = new QLabel(QString("<b>%1</b>").arg(m_currentDevice->modelName()), &diag);
+    nameLbl->setStyleSheet("font-size: 14px; color: #1E2228;");
+    titleBox->addWidget(nameLbl);
+
+    QString snStr = m_currentDevice->serialNumber().isEmpty() ? "Desconocido" : m_currentDevice->serialNumber();
+    auto* subLbl = new QLabel(QString("ID / Serie: %1").arg(snStr), &diag);
+    subLbl->setStyleSheet("color: #646C76; font-size: 11px;");
+    titleBox->addWidget(subLbl);
+    headBox->addLayout(titleBox);
+    headBox->addStretch();
+    layout->addLayout(headBox);
+
+    // Grupo 1: Métricas de Telemetría en Vivo
+    auto* metricGroup = new QGroupBox("TELEMETRÍA EN TIEMPO REAL (CELDA LI-PO)", &diag);
+    auto* grid = new QGridLayout(metricGroup);
+    grid->setSpacing(8);
+
+    grid->addWidget(new QLabel("Voltaje actual medido:", metricGroup), 0, 0);
+    auto* voltValLbl = new QLabel(QString("<b>%1 V</b>").arg(batt.voltage, 0, 'f', 2), metricGroup);
+    voltValLbl->setStyleSheet("color: #15803D; font-size: 13px; font-weight: bold;");
+    grid->addWidget(voltValLbl, 0, 1);
+
+    grid->addWidget(new QLabel("Nivel de carga / SoC:", metricGroup), 1, 0);
+    auto* pctValLbl = new QLabel(QString("<b>%1%</b>").arg(batt.percentage), metricGroup);
+    pctValLbl->setStyleSheet("font-size: 13px; font-weight: bold;");
+    grid->addWidget(pctValLbl, 1, 1);
+
+    grid->addWidget(new QLabel("Capacidad de carga:", metricGroup), 2, 0);
+    auto* mahValLbl = new QLabel(QString("<b>%1 / %2 mAh</b>").arg(batt.currentMah).arg(batt.maxCapacityMah), metricGroup);
+    grid->addWidget(mahValLbl, 2, 1);
+
+    grid->addWidget(new QLabel("Voltaje máx. de corte:", metricGroup), 3, 0);
+    grid->addWidget(new QLabel(QString("%1 V (Límite corte protección)").arg(batt.maxVoltage, 0, 'f', 2), metricGroup), 3, 1);
+
+    grid->addWidget(new QLabel("Estado del circuito:", metricGroup), 4, 0);
+    QString pwrDesc = batt.isProtectionCutoff ? "Alimentado por USB (Corte 4.2V activo - Sin sobrecarga)" : "Cargando celda por USB 5V";
+    auto* pwrLbl = new QLabel(pwrDesc, metricGroup);
+    pwrLbl->setStyleSheet(batt.isProtectionCutoff ? "color: #15803D; font-weight: bold;" : "color: #1D4ED8; font-weight: bold;");
+    grid->addWidget(pwrLbl, 4, 1);
+
+    layout->addWidget(metricGroup);
+
+    // Barra de progreso visual
+    auto* pbar = new QProgressBar(&diag);
+    pbar->setRange(0, 100);
+    pbar->setValue(batt.percentage);
+    pbar->setFixedHeight(14);
+    pbar->setTextVisible(false);
+    pbar->setStyleSheet(
+        "QProgressBar { background: #D0D5DD; border: 1px solid #9DA3AC; border-radius: 4px; } "
+        "QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #34D399, stop:1 #059669); border-radius: 3px; }"
+    );
+    layout->addWidget(pbar);
+
+    // Grupo 2: Calibración con Multímetro
+    auto* calibGroup = new QGroupBox("CALIBRACIÓN CON MULTÍMETRO / MODO DIAGNÓSTICO", &diag);
+    auto* calibLayout = new QVBoxLayout(calibGroup);
+    calibLayout->setSpacing(8);
+
+    auto* infoNote = new QLabel("Si mediste la celda con multímetro o en la pantalla de diagnóstico del iPod (A2D Tests), puedes calibrar el valor exacto:", calibGroup);
+    infoNote->setWordWrap(true);
+    infoNote->setStyleSheet("color: #555D66; font-size: 11px;");
+    calibLayout->addWidget(infoNote);
+
+    auto* spinRow = new QHBoxLayout();
+    spinRow->addWidget(new QLabel("Voltaje medido:", calibGroup));
+    auto* spin = new QDoubleSpinBox(calibGroup);
+    spin->setRange(3.30, 4.30);
+    spin->setSingleStep(0.01);
+    spin->setDecimals(2);
+    spin->setValue(batt.voltage);
+    spin->setSuffix(" V");
+    spin->setStyleSheet("background: white; border: 1px solid #8E949C; border-radius: 4px; padding: 4px; font-weight: bold;");
+    spinRow->addWidget(spin);
+    calibLayout->addLayout(spinRow);
+
+    auto* quickRow = new QHBoxLayout();
+    quickRow->setSpacing(4);
+    auto makeQuickBtn = [&](const QString& text, double v) {
+        auto* b = new QPushButton(text, calibGroup);
+        b->setStyleSheet("font-size: 10px; padding: 3px 6px;");
+        connect(b, &QPushButton::clicked, [spin, v]() {
+            spin->setValue(v);
+        });
+        return b;
+    };
+    quickRow->addWidget(makeQuickBtn("100% (4.20V)", 4.20));
+    quickRow->addWidget(makeQuickBtn("80% (4.02V)", 4.02));
+    quickRow->addWidget(makeQuickBtn("50% (3.78V)", 3.78));
+    quickRow->addWidget(makeQuickBtn("20% (3.64V)", 3.64));
+    calibLayout->addLayout(quickRow);
+
+    layout->addWidget(calibGroup);
+
+    // Botones de acción
+    auto* btnRow = new QHBoxLayout();
+    btnRow->addStretch();
+
+    auto* applyBtn = new QPushButton("💾 Aplicar y Guardar", &diag);
+    applyBtn->setStyleSheet("background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4E86E4, stop:1 #2762C6); color: white; border: 1px solid #1D4DB8; border-radius: 4px; padding: 6px 14px; font-weight: bold;");
+    connect(applyBtn, &QPushButton::clicked, [&]() {
+        double v = spin->value();
+        m_currentDevice->calibrateBattery(v);
+        updateDeviceView();
+        diag.accept();
+    });
+    btnRow->addWidget(applyBtn);
+
+    auto* closeBtn = new QPushButton("Cerrar", &diag);
+    connect(closeBtn, &QPushButton::clicked, &diag, &QDialog::reject);
+    btnRow->addWidget(closeBtn);
+
+    layout->addLayout(btnRow);
+
+    diag.exec();
 }
 
 

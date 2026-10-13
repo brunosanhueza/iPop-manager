@@ -9,26 +9,26 @@ int main(int argc, char *argv[]) {
     app.setApplicationVersion("1.0.0");
     app.setOrganizationName("iPop");
 
-    // Configurar estilo base Fusion y paleta moderna oscura
+    // Configurar estilo base Fusion y paleta clásica de iTunes 10 (Platino / Metal cepillado)
     app.setStyle(QStyleFactory::create("Fusion"));
 
-    QPalette darkPalette;
-    darkPalette.setColor(QPalette::Window, QColor(15, 23, 42));       // Slate 900
-    darkPalette.setColor(QPalette::WindowText, QColor(241, 245, 249));  // Slate 100
-    darkPalette.setColor(QPalette::Base, QColor(30, 41, 59));         // Slate 800
-    darkPalette.setColor(QPalette::AlternateBase, QColor(15, 23, 42));
-    darkPalette.setColor(QPalette::ToolTipBase, QColor(15, 23, 42));
-    darkPalette.setColor(QPalette::ToolTipText, QColor(241, 245, 249));
-    darkPalette.setColor(QPalette::Text, QColor(241, 245, 249));
-    darkPalette.setColor(QPalette::Button, QColor(30, 41, 59));
-    darkPalette.setColor(QPalette::ButtonText, QColor(241, 245, 249));
-    darkPalette.setColor(QPalette::BrightText, Qt::red);
-    darkPalette.setColor(QPalette::Link, QColor(56, 189, 248));        // Sky 400
-    darkPalette.setColor(QPalette::Highlight, QColor(37, 99, 235));    // Blue 600
-    darkPalette.setColor(QPalette::HighlightedText, Qt::white);
-    darkPalette.setColor(QPalette::Disabled, QPalette::Text, QColor(100, 116, 139));
-    darkPalette.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(100, 116, 139));
-    app.setPalette(darkPalette);
+    QPalette itunesPalette;
+    itunesPalette.setColor(QPalette::Window, QColor(234, 236, 240));         // #EAECF0 Base metálica platino
+    itunesPalette.setColor(QPalette::WindowText, QColor(32, 36, 42));       // #20242A Texto principal oscuro
+    itunesPalette.setColor(QPalette::Base, QColor(255, 255, 255));           // #FFFFFF Fondo tabla
+    itunesPalette.setColor(QPalette::AlternateBase, QColor(242, 246, 252));  // #F2F6FC Filas alternadas cian/azul suave (Zebra)
+    itunesPalette.setColor(QPalette::ToolTipBase, QColor(255, 255, 225));
+    itunesPalette.setColor(QPalette::ToolTipText, QColor(20, 20, 20));
+    itunesPalette.setColor(QPalette::Text, QColor(32, 36, 42));
+    itunesPalette.setColor(QPalette::Button, QColor(238, 240, 244));
+    itunesPalette.setColor(QPalette::ButtonText, QColor(32, 36, 42));
+    itunesPalette.setColor(QPalette::BrightText, Qt::red);
+    itunesPalette.setColor(QPalette::Link, QColor(36, 102, 212));
+    itunesPalette.setColor(QPalette::Highlight, QColor(56, 117, 215));       // #3875D7 Azul Real icónico de iTunes
+    itunesPalette.setColor(QPalette::HighlightedText, Qt::white);
+    itunesPalette.setColor(QPalette::Disabled, QPalette::Text, QColor(140, 146, 154));
+    itunesPalette.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(140, 146, 154));
+    app.setPalette(itunesPalette);
 
     MainWindow window;
     window.show();

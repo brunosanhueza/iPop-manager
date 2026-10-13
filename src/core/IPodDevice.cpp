@@ -9,6 +9,7 @@
 #include <QStorageInfo>
 #include <QSet>
 #include <QDebug>
+#include <QSettings>
 
 #include <QProcess>
 
@@ -28,6 +29,30 @@ namespace {
     const QSet<QString> AUDIO_EXTENSIONS = {"mp3", "m4a", "aac", "wav", "aif", "aiff"};
     const QSet<QString> VIDEO_EXTENSIONS = {"mp4", "m4v", "mov", "avi"};
     const QSet<QString> PHOTO_EXTENSIONS = {"jpg", "jpeg", "png", "bmp", "ithmb"};
+
+    // Curva electroquímica real de celda Li-Po (LiCoO2) para iPod
+    double percentageToVoltage(double pct, double maxV = 4.20, double minV = 3.35) {
+        pct = qBound(0.0, pct, 100.0);
+        if (pct >= 90.0) {
+            return 4.10 + ((pct - 90.0) / 10.0) * (maxV - 4.10);
+        } else if (pct >= 20.0) {
+            return 3.64 + ((pct - 20.0) / 70.0) * (4.10 - 3.64);
+        } else {
+            return minV + (pct / 20.0) * (3.64 - minV);
+        }
+    }
+
+    double voltageToPercentage(double v, double maxV = 4.20, double minV = 3.35) {
+        if (v >= maxV) return 100.0;
+        if (v <= minV) return 0.0;
+        if (v >= 4.10) {
+            return 90.0 + ((v - 4.10) / (maxV - 4.10)) * 10.0;
+        } else if (v >= 3.64) {
+            return 20.0 + ((v - 3.64) / (4.10 - 3.64)) * 70.0;
+        } else {
+            return ((v - minV) / (3.64 - minV)) * 20.0;
+        }
+    }
 
     QString resolveIpodModel(const QString& modelNumStr) {
         QString m = modelNumStr.trimmed().toUpper();
@@ -290,12 +315,159 @@ void IPodDevice::scanStorageCategories() {
     }
 }
 
-void IPodDevice::refreshBatteryStatus() {
-    m_battery = BatteryStatus{};
+int IPodDevice::defaultCapacityMahForModel(const QString& modelName, const QString& generation) {
+    QString m = modelName.toUpper() + " " + generation.toUpper();
+    // iPod Nano 3G ("conejillo de indias") -> 400 mAh exactos
+    if (m.contains("NANO 3G") || m.contains("A978") || m.contains("B249") || m.contains("B261")) return 400;
+    if (m.contains("NANO 1G")) return 290;
+    if (m.contains("NANO 2G")) return 330;
+    if (m.contains("NANO 4G") || m.contains("NANO 5G")) return 240;
+    if (m.contains("NANO 6G")) return 105;
+    if (m.contains("NANO 7G")) return 220;
+    if (m.contains("MINI 1G")) return 400;
+    if (m.contains("MINI 2G")) return 500;
+    if (m.contains("VIDEO") || m.contains("5G")) {
+        return (m.contains("60") || m.contains("80")) ? 850 : 450;
+    }
+    if (m.contains("CLASSIC")) {
+        return (m.contains("160") && m.contains("THICK")) ? 850 : 650;
+    }
+    if (m.contains("SHUFFLE 1G")) return 220;
+    if (m.contains("SHUFFLE 2G")) return 120;
+    if (m.contains("SHUFFLE 3G")) return 73;
+    if (m.contains("SHUFFLE 4G")) return 51;
+    if (m.contains("3G")) return 630;
+    if (m.contains("4G") || m.contains("PHOTO") || m.contains("COLOR")) return 750;
+    if (m.contains("1G") || m.contains("2G")) return 1200;
+    return 400; // Por defecto celda Li-Po de 400 mAh
+}
+
+void IPodDevice::loadBatteryStateFromDisk() {
+    int defCap = defaultCapacityMahForModel(m_modelName, m_generation);
     m_battery.available = true;
-    m_battery.percentage = 100;
+    m_battery.maxCapacityMah = defCap;
+    m_battery.maxVoltage = 4.20;
+    m_battery.minVoltage = 3.35;
     m_battery.isCharging = true;
-    m_battery.stateString = "Alimentado por USB (Cargando)";
+
+    QDir dir(m_mountPath);
+    QString battPath = dir.filePath("iPod_Control/Device/.ipop_battery");
+    if (!QFile::exists(battPath)) {
+        battPath = dir.filePath("ipod_control/device/.ipop_battery");
+    }
+
+    if (QFile::exists(battPath)) {
+        QSettings settings(battPath, QSettings::IniFormat);
+        m_battery.maxCapacityMah = settings.value("nominalCapacityMah", defCap).toInt();
+        m_battery.maxVoltage = settings.value("maxVoltage", 4.20).toDouble();
+        m_battery.minVoltage = settings.value("minVoltage", 3.35).toDouble();
+        m_battery.voltage = settings.value("currentVoltage", 4.20).toDouble();
+        m_battery.currentMah = settings.value("currentMah", m_battery.maxCapacityMah).toInt();
+        m_battery.percentage = qBound(0, static_cast<int>((m_battery.currentMah * 100.0) / m_battery.maxCapacityMah), 100);
+        m_battery.isProtectionCutoff = (m_battery.percentage >= 100 || m_battery.voltage >= m_battery.maxVoltage);
+    } else {
+        // Inicialización predeterminada de fábrica: 100% de carga, 4.20 V, corte de protección activo
+        m_battery.voltage = 4.20;
+        m_battery.currentMah = defCap;
+        m_battery.percentage = 100;
+        m_battery.isProtectionCutoff = true;
+        saveBatteryStateToDisk();
+    }
+
+    if (m_battery.isProtectionCutoff) {
+        m_battery.stateString = QString("%1 V (100% • %2 mAh) - Carga completa (Corte activo)")
+            .arg(m_battery.voltage, 0, 'f', 2)
+            .arg(m_battery.maxCapacityMah);
+    } else {
+        m_battery.stateString = QString("%1 V (%2% • %3/%4 mAh) - Cargando USB")
+            .arg(m_battery.voltage, 0, 'f', 2)
+            .arg(m_battery.percentage)
+            .arg(m_battery.currentMah)
+            .arg(m_battery.maxCapacityMah);
+    }
+}
+
+void IPodDevice::saveBatteryStateToDisk() {
+    if (!m_isValid || m_mountPath.isEmpty()) return;
+    QDir dir(m_mountPath);
+    QString devDir = dir.filePath("iPod_Control/Device");
+    if (!QDir(devDir).exists()) {
+        devDir = dir.filePath("ipod_control/device");
+    }
+    if (!QDir(devDir).exists()) return;
+
+    QString battPath = QDir(devDir).filePath(".ipop_battery");
+    QSettings settings(battPath, QSettings::IniFormat);
+    settings.setValue("nominalCapacityMah", m_battery.maxCapacityMah);
+    settings.setValue("maxVoltage", m_battery.maxVoltage);
+    settings.setValue("minVoltage", m_battery.minVoltage);
+    settings.setValue("currentVoltage", m_battery.voltage);
+    settings.setValue("currentMah", m_battery.currentMah);
+    settings.setValue("isProtectionCutoff", m_battery.isProtectionCutoff);
+    settings.sync();
+}
+
+void IPodDevice::refreshBatteryStatus() {
+    loadBatteryStateFromDisk();
+}
+
+void IPodDevice::updateBatteryTelemetry(double deltaSeconds) {
+    if (!m_isValid || !m_battery.available) return;
+
+    if (m_battery.isCharging && m_battery.currentMah < m_battery.maxCapacityMah) {
+        // Tasa de carga típica USB: ~250 mA
+        double deltaMah = (250.0 / 3600.0) * deltaSeconds;
+        double newMah = m_battery.currentMah + deltaMah;
+        if (newMah >= m_battery.maxCapacityMah) {
+            newMah = m_battery.maxCapacityMah;
+            m_battery.isProtectionCutoff = true;
+            m_battery.voltage = m_battery.maxVoltage;
+            m_battery.percentage = 100;
+        } else {
+            m_battery.currentMah = static_cast<int>(newMah);
+            m_battery.percentage = qBound(0, static_cast<int>((m_battery.currentMah * 100.0) / m_battery.maxCapacityMah), 100);
+            m_battery.voltage = percentageToVoltage(m_battery.percentage, m_battery.maxVoltage, m_battery.minVoltage);
+            m_battery.isProtectionCutoff = false;
+        }
+        m_battery.currentMah = static_cast<int>(newMah);
+        saveBatteryStateToDisk();
+    } else if (m_battery.percentage >= 100 || m_battery.voltage >= m_battery.maxVoltage) {
+        m_battery.isProtectionCutoff = true;
+        m_battery.voltage = m_battery.maxVoltage;
+        m_battery.percentage = 100;
+        m_battery.currentMah = m_battery.maxCapacityMah;
+    }
+
+    if (m_battery.isProtectionCutoff) {
+        m_battery.stateString = QString("%1 V (100% • %2 mAh) - Carga completa (Corte 4.2V)")
+            .arg(m_battery.voltage, 0, 'f', 2)
+            .arg(m_battery.maxCapacityMah);
+    } else {
+        m_battery.stateString = QString("%1 V (%2% • %3/%4 mAh) - Cargando USB")
+            .arg(m_battery.voltage, 0, 'f', 2)
+            .arg(m_battery.percentage)
+            .arg(m_battery.currentMah)
+            .arg(m_battery.maxCapacityMah);
+    }
+}
+
+void IPodDevice::calibrateBattery(double newVoltage, int newMah) {
+    if (!m_battery.available) return;
+
+    newVoltage = qBound(m_battery.minVoltage, newVoltage, m_battery.maxVoltage + 0.10);
+    m_battery.voltage = newVoltage;
+
+    if (newMah > 0) {
+        m_battery.currentMah = qBound(0, newMah, m_battery.maxCapacityMah);
+        m_battery.percentage = qBound(0, static_cast<int>((m_battery.currentMah * 100.0) / m_battery.maxCapacityMah), 100);
+    } else {
+        double pct = voltageToPercentage(newVoltage, m_battery.maxVoltage, m_battery.minVoltage);
+        m_battery.percentage = qBound(0, static_cast<int>(pct + 0.5), 100);
+        m_battery.currentMah = qBound(0, static_cast<int>((pct / 100.0) * m_battery.maxCapacityMah + 0.5), m_battery.maxCapacityMah);
+    }
+
+    m_battery.isProtectionCutoff = (m_battery.percentage >= 100 || m_battery.voltage >= m_battery.maxVoltage);
+    saveBatteryStateToDisk();
 }
 
 QString IPodDevice::formatBytes(uint64_t bytes) {
