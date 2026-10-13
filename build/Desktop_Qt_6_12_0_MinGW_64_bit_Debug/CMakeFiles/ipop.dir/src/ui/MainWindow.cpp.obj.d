@@ -445,12 +445,23 @@ CMakeFiles/ipop.dir/src/ui/MainWindow.cpp.obj: \
  C:/Qt/6.12.0/mingw_64/include/QtWidgets/QWidget \
  C:\Users\Zacky\Desktop\iPop\src\ui\TrackTableModel.h \
  C:/Qt/6.12.0/mingw_64/include/QtCore/QAbstractTableModel \
- C:/Qt/6.12.0/mingw_64/include/QtWidgets/QVBoxLayout \
+ C:\Users\Zacky\Desktop\iPop\src\ui\ITunesPlayerWidget.h \
+ C:/Qt/6.12.0/mingw_64/include/QtWidgets/QSlider \
+ C:/Qt/6.12.0/mingw_64/include/QtWidgets/QHBoxLayout \
  C:/Qt/6.12.0/mingw_64/include/QtWidgets/qboxlayout.h \
  C:/Qt/6.12.0/mingw_64/include/QtWidgets/qlayout.h \
  C:/Qt/6.12.0/mingw_64/include/QtWidgets/qlayoutitem.h \
  C:/Qt/6.12.0/mingw_64/include/QtWidgets/qgridlayout.h \
- C:/Qt/6.12.0/mingw_64/include/QtWidgets/QHBoxLayout \
+ C:/Qt/6.12.0/mingw_64/include/QtWidgets/QVBoxLayout \
+ C:/Qt/6.12.0/mingw_64/include/QtMultimedia/QMediaPlayer \
+ C:/Qt/6.12.0/mingw_64/include/QtMultimedia/qmediaplayer.h \
+ C:/Qt/6.12.0/mingw_64/include/QtMultimedia/qtmultimediaglobal.h \
+ C:/Qt/6.12.0/mingw_64/include/QtMultimedia/qtmultimedia-config.h \
+ C:/Qt/6.12.0/mingw_64/include/QtMultimedia/qtmultimediaexports.h \
+ C:/Qt/6.12.0/mingw_64/include/QtMultimedia/qtaudio.h \
+ C:/Qt/6.12.0/mingw_64/include/QtMultimedia/qaudio.h \
+ C:/Qt/6.12.0/mingw_64/include/QtMultimedia/QAudioOutput \
+ C:/Qt/6.12.0/mingw_64/include/QtMultimedia/qaudiooutput.h \
  C:/Qt/6.12.0/mingw_64/include/QtWidgets/QGridLayout \
  C:/Qt/6.12.0/mingw_64/include/QtWidgets/QGroupBox \
  C:/Qt/6.12.0/mingw_64/include/QtWidgets/qgroupbox.h \
@@ -496,6 +507,10 @@ CMakeFiles/ipop.dir/src/ui/MainWindow.cpp.obj: \
  C:/Qt/6.12.0/mingw_64/include/QtWidgets/QMessageBox \
  C:/Qt/6.12.0/mingw_64/include/QtWidgets/qmessagebox.h \
  C:/Qt/6.12.0/mingw_64/include/QtWidgets/qdialogbuttonbox.h \
+ C:/Qt/6.12.0/mingw_64/include/QtWidgets/QInputDialog \
+ C:/Qt/6.12.0/mingw_64/include/QtWidgets/qinputdialog.h \
+ C:/Qt/6.12.0/mingw_64/include/QtWidgets/QMenu \
+ C:/Qt/6.12.0/mingw_64/include/QtWidgets/qmenu.h \
  C:/Qt/6.12.0/mingw_64/include/QtCore/QProcess \
  C:/Qt/6.12.0/mingw_64/include/QtCore/qprocess.h \
  C:/Qt/6.12.0/mingw_64/include/QtWidgets/QStatusBar \
@@ -509,6 +524,54 @@ CMakeFiles/ipop.dir/src/ui/MainWindow.cpp.obj: \
  C:/Qt/6.12.0/mingw_64/include/QtCore/qabstracteventdispatcher.h \
  C:/Qt/6.12.0/mingw_64/include/QtCore/qeventloop.h \
  C:/Qt/6.12.0/mingw_64/include/QtCore/qdeadlinetimer.h \
+ C:/Qt/6.12.0/mingw_64/include/QtCore/QThread \
+ C:/Qt/6.12.0/mingw_64/include/QtCore/qthread.h \
+ C:/Qt/Tools/mingw1310_64/lib/gcc/x86_64-w64-mingw32/13.1.0/include/c++/future \
+ C:/Qt/Tools/mingw1310_64/lib/gcc/x86_64-w64-mingw32/13.1.0/include/c++/mutex \
+ C:/Qt/Tools/mingw1310_64/lib/gcc/x86_64-w64-mingw32/13.1.0/include/c++/bits/std_mutex.h \
+ C:/Qt/Tools/mingw1310_64/lib/gcc/x86_64-w64-mingw32/13.1.0/include/c++/bits/unique_lock.h \
+ C:/Qt/Tools/mingw1310_64/lib/gcc/x86_64-w64-mingw32/13.1.0/include/c++/condition_variable \
+ C:/Qt/Tools/mingw1310_64/lib/gcc/x86_64-w64-mingw32/13.1.0/include/c++/bits/atomic_futex.h \
+ C:/Qt/Tools/mingw1310_64/lib/gcc/x86_64-w64-mingw32/13.1.0/include/c++/bits/std_thread.h \
+ C:/Qt/6.12.0/mingw_64/include/QtWidgets/QApplication \
+ C:/Qt/6.12.0/mingw_64/include/QtWidgets/qapplication.h \
+ C:/Qt/6.12.0/mingw_64/include/QtCore/qcoreapplication.h \
+ C:/Qt/6.12.0/mingw_64/include/QtCore/qcoreevent.h \
+ C:/Qt/6.12.0/mingw_64/include/QtCore/qnativeinterface.h \
+ C:/Qt/6.12.0/mingw_64/include/QtCore/qcoreapplication_platform.h \
+ C:/Qt/6.12.0/mingw_64/include/QtGui/qguiapplication.h \
+ C:/Qt/6.12.0/mingw_64/include/QtGui/qinputmethod.h \
+ C:/Qt/6.12.0/mingw_64/include/QtGui/qguiapplication_platform.h \
+ C:/Qt/6.12.0/mingw_64/include/QtGui/QDragEnterEvent \
+ C:/Qt/6.12.0/mingw_64/include/QtGui/qevent.h \
+ C:/Qt/6.12.0/mingw_64/include/QtGui/qeventpoint.h \
+ C:/Qt/6.12.0/mingw_64/include/QtGui/qvector2d.h \
+ C:/Qt/6.12.0/mingw_64/include/QtGui/qvectornd.h \
+ C:/Qt/6.12.0/mingw_64/include/QtGui/qpointingdevice.h \
+ C:/Qt/6.12.0/mingw_64/include/QtGui/qinputdevice.h \
+ C:/Qt/6.12.0/mingw_64/include/QtGui/qscreen.h \
+ C:/Qt/6.12.0/mingw_64/include/QtCore/QList \
+ C:/Qt/6.12.0/mingw_64/include/QtCore/QObject \
+ C:/Qt/6.12.0/mingw_64/include/QtCore/QRect \
+ C:/Qt/6.12.0/mingw_64/include/QtCore/QSize \
+ C:/Qt/6.12.0/mingw_64/include/QtCore/QSizeF \
+ C:/Qt/6.12.0/mingw_64/include/QtGui/QTransform \
+ C:/Qt/6.12.0/mingw_64/include/QtGui/qscreen_platform.h \
+ C:/Qt/6.12.0/mingw_64/include/QtGui/QDropEvent \
+ C:/Qt/6.12.0/mingw_64/include/QtCore/QMimeData \
+ C:/Qt/6.12.0/mingw_64/include/QtCore/qmimedata.h \
+ C:/Qt/6.12.0/mingw_64/include/QtCore/QUrl \
+ C:/Qt/6.12.0/mingw_64/include/QtCore/QDirIterator \
+ C:/Qt/6.12.0/mingw_64/include/QtCore/qdiriterator.h \
+ C:\Users\Zacky\Desktop\iPop\src\ui\DeleteProgressDialog.h \
+ C:/Qt/6.12.0/mingw_64/include/QtWidgets/QDialog \
+ C:/Qt/6.12.0/mingw_64/include/QtWidgets/QProgressBar \
+ C:/Qt/6.12.0/mingw_64/include/QtWidgets/qprogressbar.h \
+ C:/Users/Zacky/Desktop/iPop/src/core/AudioConverter.h \
+ C:/Qt/6.12.0/mingw_64/include/QtCore/QFileInfo \
+ C:/Users/Zacky/Desktop/iPop/src/core/TrackImporter.h \
+ C:/Users/Zacky/Desktop/iPop/src/core/ITunesDBReader.h \
+ C:/Qt/6.12.0/mingw_64/include/QtCore/QSet \
  C:/Qt/Tools/mingw1310_64/x86_64-w64-mingw32/include/windows.h \
  C:/Qt/Tools/mingw1310_64/x86_64-w64-mingw32/include/sdkddkver.h \
  C:/Qt/Tools/mingw1310_64/x86_64-w64-mingw32/include/excpt.h \

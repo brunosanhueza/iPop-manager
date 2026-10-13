@@ -11,6 +11,7 @@ import string
 import struct
 import hashlib
 import subprocess
+import time
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Set
 
@@ -19,14 +20,20 @@ try:
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
         QGridLayout, QFrame, QLabel, QComboBox, QPushButton, QTreeWidget,
         QTreeWidgetItem, QTableView, QLineEdit, QSplitter, QHeaderView,
-        QMessageBox, QFileDialog, QToolTip
+        QMessageBox, QFileDialog, QToolTip, QProgressBar, QDialog, QSlider,
+        QInputDialog, QMenu
     )
     from PyQt6.QtCore import (
-        Qt, QAbstractTableModel, QModelIndex, QRectF, QPointF, QStorageInfo, QTimer
+        Qt, QAbstractTableModel, QModelIndex, QRectF, QPointF, QStorageInfo, QTimer, QUrl
     )
     from PyQt6.QtGui import (
         QPainter, QColor, QPainterPath, QLinearGradient, QPen, QPalette, QFont
     )
+    try:
+        from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
+        HAS_MULTIMEDIA = True
+    except ImportError:
+        HAS_MULTIMEDIA = False
 except ImportError:
     print("\n[!] PyQt6 no está instalado en tu Python.")
     print("Ejecuta en tu terminal:  pip install PyQt6\n")
@@ -509,6 +516,290 @@ def remove_tracks_from_itunesdb(db_path: str, delete_uids: Set[int]) -> bool:
     return True
 
 
+def make_mhod_string(type_id: int, text: str) -> bytearray:
+    u16 = text.encode('utf-16le')
+    hdr_len = 24
+    tot_len = hdr_len + 16 + len(u16)
+    mhod = bytearray(tot_len)
+    mhod[0:4] = b'mhod'
+    struct.pack_into('<IIII', mhod, 4, hdr_len, tot_len, type_id, 0)
+    struct.pack_into('<II', mhod, 20, 1, 0)
+    struct.pack_into('<III', mhod, 28, len(u16), 0, 0)
+    mhod[40:40+len(u16)] = u16
+    return mhod
+
+
+def delete_playlists_from_itunesdb(db_path: str, playlist_indices: Set[int]) -> bool:
+    if not playlist_indices or not os.path.exists(db_path):
+        return False
+
+    with open(db_path, "rb") as f:
+        data = f.read()
+
+    if len(data) < 100 or data[:4] != b'mhbd':
+        return False
+
+    bak_path = db_path + ".bak"
+    if not os.path.exists(bak_path):
+        with open(bak_path, "wb") as bf:
+            bf.write(data)
+
+    mhbd_hdr_len = struct.unpack('<I', data[4:8])[0]
+    out_mhbd = bytearray(data[:mhbd_hdr_len])
+
+    pos = mhbd_hdr_len
+    new_mhsd_blocks = []
+
+    while pos + 16 <= len(data):
+        if data[pos:pos+4] != b'mhsd':
+            break
+        hdr_len, tot_len, ds_type = struct.unpack('<III', data[pos+4:pos+16])
+        child_pos = pos + hdr_len
+
+        if ds_type in (2, 3) and data[child_pos:child_pos+4] == b'mhlp':
+            mhsd_hdr = bytearray(data[pos:child_pos])
+            mhlp_hdr_len, num_pl = struct.unpack('<II', data[child_pos+4:child_pos+12])
+            mhlp_hdr = bytearray(data[child_pos:child_pos+mhlp_hdr_len])
+
+            remaining_mhyps = []
+            pl_pos = child_pos + mhlp_hdr_len
+            kept_count = 0
+
+            for pi in range(num_pl):
+                if pl_pos + 12 > len(data) or data[pl_pos:pl_pos+4] != b'mhyp':
+                    break
+                ptot_len = struct.unpack('<I', data[pl_pos+8:pl_pos+12])[0]
+                if pi != 0 and pi in playlist_indices:
+                    pass  # Omitir esta playlist
+                else:
+                    remaining_mhyps.append(data[pl_pos:pl_pos+ptot_len])
+                    kept_count += 1
+                if ptot_len == 0:
+                    break
+                pl_pos += ptot_len
+
+            struct.pack_into('<I', mhlp_hdr, 8, kept_count)
+            ds_payload = mhlp_hdr + b''.join(remaining_mhyps)
+            struct.pack_into('<I', mhsd_hdr, 8, len(mhsd_hdr) + len(ds_payload))
+            new_mhsd_blocks.append(mhsd_hdr + ds_payload)
+        else:
+            new_mhsd_blocks.append(data[pos:pos+tot_len])
+
+        if tot_len == 0:
+            break
+        pos += tot_len
+
+    full_body = b''.join(new_mhsd_blocks)
+    struct.pack_into('<I', out_mhbd, 8, len(out_mhbd) + len(full_body))
+    new_db = bytearray(out_mhbd + full_body)
+
+    mount_dir = os.path.dirname(os.path.dirname(os.path.dirname(db_path)))
+    guid = get_ipod_firewire_guid(mount_dir)
+    if guid:
+        update_itunesdb_hash58(new_db, guid)
+
+    tmp_path = db_path + ".tmp"
+    with open(tmp_path, "wb") as f:
+        f.write(new_db)
+        f.flush()
+        os.fsync(f.fileno())
+
+    if os.path.exists(db_path):
+        os.remove(db_path)
+    os.rename(tmp_path, db_path)
+
+    flush_ipod_volume(mount_dir)
+    return True
+
+
+def rename_playlist_in_itunesdb(db_path: str, playlist_idx: int, new_name: str) -> bool:
+    if playlist_idx <= 0 or not new_name.strip() or not os.path.exists(db_path):
+        return False
+
+    with open(db_path, "rb") as f:
+        data = f.read()
+
+    if len(data) < 100 or data[:4] != b'mhbd':
+        return False
+
+    bak_path = db_path + ".bak"
+    if not os.path.exists(bak_path):
+        with open(bak_path, "wb") as bf:
+            bf.write(data)
+
+    mhbd_hdr_len = struct.unpack('<I', data[4:8])[0]
+    out_mhbd = bytearray(data[:mhbd_hdr_len])
+
+    pos = mhbd_hdr_len
+    new_mhsd_blocks = []
+
+    while pos + 16 <= len(data):
+        if data[pos:pos+4] != b'mhsd':
+            break
+        hdr_len, tot_len, ds_type = struct.unpack('<III', data[pos+4:pos+16])
+        child_pos = pos + hdr_len
+
+        if ds_type in (2, 3) and data[child_pos:child_pos+4] == b'mhlp':
+            mhsd_hdr = bytearray(data[pos:child_pos])
+            mhlp_hdr_len, num_pl = struct.unpack('<II', data[child_pos+4:child_pos+12])
+            mhlp_hdr = bytearray(data[child_pos:child_pos+mhlp_hdr_len])
+
+            remaining_mhyps = []
+            pl_pos = child_pos + mhlp_hdr_len
+
+            for pi in range(num_pl):
+                if pl_pos + 16 > len(data) or data[pl_pos:pl_pos+4] != b'mhyp':
+                    break
+                phdr_len, ptot_len, pnum_mhod = struct.unpack('<III', data[pl_pos+4:pl_pos+16])
+
+                if pi == playlist_idx:
+                    mhyp_hdr = bytearray(data[pl_pos:pl_pos+phdr_len])
+                    mpos = pl_pos + phdr_len
+                    new_mhods = bytearray()
+                    title_replaced = False
+
+                    for _ in range(pnum_mhod):
+                        if mpos + 16 > len(data) or data[mpos:mpos+4] != b'mhod':
+                            break
+                        mhdr_len, mtot_len, mtype = struct.unpack('<III', data[mpos+4:mpos+16])
+                        if mtype == 1:
+                            new_mhods.extend(make_mhod_string(1, new_name.strip()))
+                            title_replaced = True
+                        else:
+                            new_mhods.extend(data[mpos:mpos+mtot_len])
+                        if mtot_len == 0:
+                            break
+                        mpos += mtot_len
+
+                    if not title_replaced:
+                        title_bytes = make_mhod_string(1, new_name.strip())
+                        new_mhods = title_bytes + new_mhods
+                        struct.pack_into('<I', mhyp_hdr, 12, pnum_mhod + 1)
+
+                    hips_len = ptot_len - (mpos - pl_pos)
+                    hips_bytes = data[mpos:mpos+hips_len] if hips_len > 0 else b''
+
+                    new_pl_tot_len = len(mhyp_hdr) + len(new_mhods) + len(hips_bytes)
+                    struct.pack_into('<I', mhyp_hdr, 8, new_pl_tot_len)
+                    remaining_mhyps.append(mhyp_hdr + new_mhods + hips_bytes)
+                else:
+                    remaining_mhyps.append(data[pl_pos:pl_pos+ptot_len])
+
+                if ptot_len == 0:
+                    break
+                pl_pos += ptot_len
+
+            ds_payload = mhlp_hdr + b''.join(remaining_mhyps)
+            struct.pack_into('<I', mhsd_hdr, 8, len(mhsd_hdr) + len(ds_payload))
+            new_mhsd_blocks.append(mhsd_hdr + ds_payload)
+        else:
+            new_mhsd_blocks.append(data[pos:pos+tot_len])
+
+        if tot_len == 0:
+            break
+        pos += tot_len
+
+    full_body = b''.join(new_mhsd_blocks)
+    struct.pack_into('<I', out_mhbd, 8, len(out_mhbd) + len(full_body))
+    new_db = bytearray(out_mhbd + full_body)
+
+    mount_dir = os.path.dirname(os.path.dirname(os.path.dirname(db_path)))
+    guid = get_ipod_firewire_guid(mount_dir)
+    if guid:
+        update_itunesdb_hash58(new_db, guid)
+
+    tmp_path = db_path + ".tmp"
+    with open(tmp_path, "wb") as f:
+        f.write(new_db)
+        f.flush()
+        os.fsync(f.fileno())
+
+    if os.path.exists(db_path):
+        os.remove(db_path)
+    os.rename(tmp_path, db_path)
+
+    flush_ipod_volume(mount_dir)
+    return True
+
+
+def create_playlist_in_itunesdb(db_path: str, name: str) -> bool:
+    if not name.strip() or not os.path.exists(db_path):
+        return False
+
+    with open(db_path, "rb") as f:
+        data = f.read()
+
+    if len(data) < 100 or data[:4] != b'mhbd':
+        return False
+
+    bak_path = db_path + ".bak"
+    if not os.path.exists(bak_path):
+        with open(bak_path, "wb") as bf:
+            bf.write(data)
+
+    mhbd_hdr_len = struct.unpack('<I', data[4:8])[0]
+    out_mhbd = bytearray(data[:mhbd_hdr_len])
+
+    pos = mhbd_hdr_len
+    new_mhsd_blocks = []
+
+    title_mhod = make_mhod_string(1, name.strip())
+    pl_hdr_len = 24
+    pl_tot_len = pl_hdr_len + len(title_mhod)
+    new_mhyp = bytearray(pl_hdr_len)
+    new_mhyp[:4] = b'mhyp'
+    struct.pack_into('<IIII', new_mhyp, 4, pl_hdr_len, pl_tot_len, 1, 0)
+    new_mhyp.extend(title_mhod)
+
+    while pos + 16 <= len(data):
+        if data[pos:pos+4] != b'mhsd':
+            break
+        hdr_len, tot_len, ds_type = struct.unpack('<III', data[pos+4:pos+16])
+        child_pos = pos + hdr_len
+
+        if ds_type in (2, 3) and data[child_pos:child_pos+4] == b'mhlp':
+            mhsd_hdr = bytearray(data[pos:child_pos])
+            mhlp_hdr_len, num_pl = struct.unpack('<II', data[child_pos+4:child_pos+12])
+            mhlp_hdr = bytearray(data[child_pos:child_pos+mhlp_hdr_len])
+
+            struct.pack_into('<I', mhlp_hdr, 8, num_pl + 1)
+            playlists_len = tot_len - hdr_len - mhlp_hdr_len
+            playlists_data = bytearray(data[child_pos+mhlp_hdr_len:child_pos+mhlp_hdr_len+playlists_len])
+            playlists_data.extend(new_mhyp)
+
+            ds_payload = mhlp_hdr + playlists_data
+            struct.pack_into('<I', mhsd_hdr, 8, len(mhsd_hdr) + len(ds_payload))
+            new_mhsd_blocks.append(mhsd_hdr + ds_payload)
+        else:
+            new_mhsd_blocks.append(data[pos:pos+tot_len])
+
+        if tot_len == 0:
+            break
+        pos += tot_len
+
+    full_body = b''.join(new_mhsd_blocks)
+    struct.pack_into('<I', out_mhbd, 8, len(out_mhbd) + len(full_body))
+    new_db = bytearray(out_mhbd + full_body)
+
+    mount_dir = os.path.dirname(os.path.dirname(os.path.dirname(db_path)))
+    guid = get_ipod_firewire_guid(mount_dir)
+    if guid:
+        update_itunesdb_hash58(new_db, guid)
+
+    tmp_path = db_path + ".tmp"
+    with open(tmp_path, "wb") as f:
+        f.write(new_db)
+        f.flush()
+        os.fsync(f.fileno())
+
+    if os.path.exists(db_path):
+        os.remove(db_path)
+    os.rename(tmp_path, db_path)
+
+    flush_ipod_volume(mount_dir)
+    return True
+
+
 class CapacityBar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -683,7 +974,10 @@ class MainWindow(QMainWindow):
         self.active_tracks: List[Track] = []
         self.all_selected = False
         self.current_playlist_ref: Optional[Playlist] = None
+        self.current_playing_track: Optional[Track] = None
+        self.is_slider_seeking = False
 
+        self.setAcceptDrops(True)
         self.setup_ui()
 
         self.itunes_timer = QTimer(self)
@@ -765,6 +1059,9 @@ class MainWindow(QMainWindow):
         self.itunes_warn_frame.setVisible(False)
         root.addWidget(self.itunes_warn_frame)
 
+        # 1.5 Reproductor Integrado (Estilo iTunes)
+        self.setup_player_ui(root)
+
         # 2. Splitter Central
         splitter = QSplitter(Qt.Orientation.Horizontal, self)
         splitter.setHandleWidth(4)
@@ -780,16 +1077,70 @@ class MainWindow(QMainWindow):
         tree_title.setStyleSheet("color: #64748B; font-size: 11px; font-weight: bold; letter-spacing: 1px; padding-left: 6px;")
         tree_layout.addWidget(tree_title)
 
+        # Barra de acciones para listas de reproducción
+        pl_tools_grid = QGridLayout()
+        pl_tools_grid.setSpacing(6)
+        pl_tools_grid.setContentsMargins(2, 0, 2, 4)
+
+        self.btn_new_pl = QPushButton("➕ Nueva", self)
+        self.btn_new_pl.setToolTip("Crear una nueva lista de reproducción en el iPod")
+        self.btn_new_pl.setStyleSheet(
+            "QPushButton { background-color: #334155; color: #F8FAFC; border-radius: 6px; padding: 5px 8px; font-size: 11px; font-weight: 500; } "
+            "QPushButton:hover { background-color: #475569; }"
+        )
+        self.btn_new_pl.clicked.connect(self.on_new_playlist)
+        pl_tools_grid.addWidget(self.btn_new_pl, 0, 0)
+
+        self.btn_select_all_pl = QPushButton("☑️ Todas", self)
+        self.btn_select_all_pl.setToolTip("Seleccionar o deseleccionar todas las listas de reproducción")
+        self.btn_select_all_pl.setStyleSheet(
+            "QPushButton { background-color: #334155; color: #F8FAFC; border-radius: 6px; padding: 5px 8px; font-size: 11px; font-weight: 500; } "
+            "QPushButton:hover { background-color: #475569; }"
+        )
+        self.btn_select_all_pl.clicked.connect(self.on_toggle_select_all_playlists)
+        pl_tools_grid.addWidget(self.btn_select_all_pl, 0, 1)
+
+        self.btn_edit_pl = QPushButton("✏️ Editar", self)
+        self.btn_edit_pl.setToolTip("Editar o renombrar la lista (habilitado si seleccionas exactamente una lista)")
+        self.btn_edit_pl.setEnabled(False)
+        self.btn_edit_pl.setStyleSheet(
+            "QPushButton { background-color: #1E293B; color: #475569; border: 1px solid #334155; border-radius: 6px; padding: 5px 8px; font-size: 11px; font-weight: 500; } "
+            "QPushButton:hover { background-color: #475569; color: white; } "
+            "QPushButton:disabled { background-color: #1E293B; color: #475569; border: 1px solid #334155; }"
+        )
+        self.btn_edit_pl.clicked.connect(self.on_edit_selected_playlist)
+        pl_tools_grid.addWidget(self.btn_edit_pl, 1, 0)
+
+        self.btn_delete_pl = QPushButton("🗑️ Eliminar", self)
+        self.btn_delete_pl.setToolTip("Eliminar las listas de reproducción seleccionadas")
+        self.btn_delete_pl.setEnabled(False)
+        self.btn_delete_pl.setStyleSheet(
+            "QPushButton { background-color: #1E293B; color: #475569; border: 1px solid #334155; border-radius: 6px; padding: 5px 8px; font-size: 11px; font-weight: 500; } "
+            "QPushButton:hover { background-color: #B91C1C; color: white; } "
+            "QPushButton:disabled { background-color: #1E293B; color: #475569; border: 1px solid #334155; }"
+        )
+        self.btn_delete_pl.clicked.connect(self.on_delete_selected_playlists)
+        pl_tools_grid.addWidget(self.btn_delete_pl, 1, 1)
+
+        tree_layout.addLayout(pl_tools_grid)
+
         self.tree = QTreeWidget(self)
         self.tree.setHeaderHidden(True)
         self.tree.setAnimated(True)
+        self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.setStyleSheet(
             "QTreeWidget { background: transparent; border: none; color: #E2E8F0; font-size: 13px; } "
             "QTreeWidget::item { padding: 6px 8px; border-radius: 6px; margin: 1px 0; } "
             "QTreeWidget::item:hover { background-color: #334155; } "
-            "QTreeWidget::item:selected { background-color: #2563EB; color: white; font-weight: 500; }"
+            "QTreeWidget::item:selected { background-color: #2563EB; color: white; font-weight: 500; } "
+            "QTreeWidget::indicator { width: 14px; height: 14px; border-radius: 3px; border: 1px solid #475569; background-color: #0F172A; } "
+            "QTreeWidget::indicator:hover { border: 1px solid #38BDF8; } "
+            "QTreeWidget::indicator:checked { background-color: #2563EB; border: 1px solid #38BDF8; }"
         )
         self.tree.itemClicked.connect(self.on_tree_item_clicked)
+        self.tree.itemChanged.connect(self.on_tree_item_changed)
+        self.tree.customContextMenuRequested.connect(self.on_tree_context_menu)
+        self.tree.currentItemChanged.connect(lambda cur, prev: self.update_playlist_action_buttons())
         tree_layout.addWidget(self.tree, 1)
 
         splitter.addWidget(tree_frame)
@@ -861,6 +1212,7 @@ class MainWindow(QMainWindow):
         self.table.setColumnWidth(5, 75)
         self.table.setColumnWidth(6, 75)
         self.table.setColumnWidth(7, 85)
+        self.table.doubleClicked.connect(self.on_table_double_clicked)
         songs_layout.addWidget(self.table, 1)
 
         splitter.addWidget(songs_frame)
@@ -906,6 +1258,325 @@ class MainWindow(QMainWindow):
         self.cap_bar = CapacityBar(self)
         b_layout.addWidget(self.cap_bar)
         root.addWidget(bottom)
+
+    def setup_player_ui(self, root):
+        player_frame = QFrame(self)
+        player_frame.setStyleSheet(
+            "QFrame { background-color: #1E293B; border: 1px solid #334155; border-radius: 10px; padding: 4px 10px; }"
+        )
+        p_layout = QHBoxLayout(player_frame)
+        p_layout.setContentsMargins(10, 4, 10, 4)
+        p_layout.setSpacing(12)
+
+        # Controles
+        ctrl_layout = QHBoxLayout()
+        ctrl_layout.setSpacing(8)
+
+        self.btn_prev = QPushButton("⏮", self)
+        self.btn_prev.setFixedSize(36, 36)
+        self.btn_prev.setStyleSheet("background-color: #334155; color: white; border-radius: 18px; font-size: 14px; border: 1px solid #475569;")
+        self.btn_prev.clicked.connect(self.play_prev_track)
+        ctrl_layout.addWidget(self.btn_prev)
+
+        self.btn_play = QPushButton("▶", self)
+        self.btn_play.setFixedSize(44, 44)
+        self.btn_play.setStyleSheet(
+            "QPushButton { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #38BDF8, stop:1 #2563EB); "
+            "color: white; border-radius: 22px; font-size: 18px; font-weight: bold; border: 1px solid #60A5FA; } "
+            "QPushButton:hover { background: #38BDF8; }"
+        )
+        self.btn_play.clicked.connect(self.toggle_playback)
+        ctrl_layout.addWidget(self.btn_play)
+
+        self.btn_next = QPushButton("⏭", self)
+        self.btn_next.setFixedSize(36, 36)
+        self.btn_next.setStyleSheet("background-color: #334155; color: white; border-radius: 18px; font-size: 14px; border: 1px solid #475569;")
+        self.btn_next.clicked.connect(self.play_next_track)
+        ctrl_layout.addWidget(self.btn_next)
+        p_layout.addLayout(ctrl_layout)
+
+        # LCD Display (iTunes Style)
+        lcd_frame = QFrame(self)
+        lcd_frame.setStyleSheet("background-color: #020617; border: 1px solid #1E293B; border-radius: 8px; padding: 4px 8px;")
+        lcd_layout = QVBoxLayout(lcd_frame)
+        lcd_layout.setContentsMargins(8, 2, 8, 2)
+        lcd_layout.setSpacing(2)
+
+        top_info = QHBoxLayout()
+        self.lcd_title = QLabel(" iPop Media Player", self)
+        self.lcd_title.setStyleSheet("color: #F8FAFC; font-weight: bold; font-size: 13px;")
+        top_info.addWidget(self.lcd_title)
+        top_info.addStretch()
+        self.lcd_sub = QLabel("Listo para reproducir", self)
+        self.lcd_sub.setStyleSheet("color: #94A3B8; font-size: 11px;")
+        top_info.addWidget(self.lcd_sub)
+        lcd_layout.addLayout(top_info)
+
+        scrub_layout = QHBoxLayout()
+        scrub_layout.setSpacing(6)
+        self.lcd_cur_time = QLabel("0:00", self)
+        self.lcd_cur_time.setFixedWidth(36)
+        self.lcd_cur_time.setStyleSheet("color: #64748B; font-size: 11px; font-family: monospace;")
+        scrub_layout.addWidget(self.lcd_cur_time)
+
+        self.lcd_slider = QSlider(Qt.Orientation.Horizontal, self)
+        self.lcd_slider.setRange(0, 1000)
+        self.lcd_slider.setValue(0)
+        self.lcd_slider.setStyleSheet(
+            "QSlider::groove:horizontal { height: 4px; background: #334155; border-radius: 2px; } "
+            "QSlider::sub-page:horizontal { background: #38BDF8; border-radius: 2px; } "
+            "QSlider::handle:horizontal { background: #FFFFFF; width: 10px; height: 10px; margin: -3px 0; border-radius: 5px; }"
+        )
+        self.lcd_slider.sliderPressed.connect(self.on_slider_pressed)
+        self.lcd_slider.sliderReleased.connect(self.on_slider_released)
+        self.lcd_slider.sliderMoved.connect(self.on_slider_moved)
+        scrub_layout.addWidget(self.lcd_slider, 1)
+
+        self.lcd_tot_time = QLabel("0:00", self)
+        self.lcd_tot_time.setFixedWidth(40)
+        self.lcd_tot_time.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.lcd_tot_time.setStyleSheet("color: #64748B; font-size: 11px; font-family: monospace;")
+        scrub_layout.addWidget(self.lcd_tot_time)
+
+        lcd_layout.addLayout(scrub_layout)
+        p_layout.addWidget(lcd_frame, 1)
+
+        # Volumen
+        vol_layout = QHBoxLayout()
+        vol_layout.setSpacing(6)
+        lbl_vdown = QLabel("🔈", self)
+        lbl_vdown.setStyleSheet("color: #94A3B8; font-size: 13px;")
+        vol_layout.addWidget(lbl_vdown)
+
+        self.vol_slider = QSlider(Qt.Orientation.Horizontal, self)
+        self.vol_slider.setRange(0, 100)
+        self.vol_slider.setValue(80)
+        self.vol_slider.setFixedWidth(80)
+        self.vol_slider.setStyleSheet(
+            "QSlider::groove:horizontal { height: 4px; background: #334155; border-radius: 2px; } "
+            "QSlider::sub-page:horizontal { background: #94A3B8; border-radius: 2px; } "
+            "QSlider::handle:horizontal { background: #E2E8F0; width: 10px; height: 10px; margin: -3px 0; border-radius: 5px; }"
+        )
+        self.vol_slider.valueChanged.connect(self.on_vol_changed)
+        vol_layout.addWidget(self.vol_slider)
+
+        lbl_vup = QLabel("🔊", self)
+        lbl_vup.setStyleSheet("color: #94A3B8; font-size: 13px;")
+        vol_layout.addWidget(lbl_vup)
+        p_layout.addLayout(vol_layout)
+
+        root.addWidget(player_frame)
+
+        # Inicializar multimedia si está disponible
+        self.media_player = None
+        self.audio_output = None
+        if HAS_MULTIMEDIA:
+            self.media_player = QMediaPlayer(self)
+            self.audio_output = QAudioOutput(self)
+            self.media_player.setAudioOutput(self.audio_output)
+            self.audio_output.setVolume(0.8)
+            self.media_player.positionChanged.connect(self.on_player_pos_changed)
+            self.media_player.durationChanged.connect(self.on_player_dur_changed)
+            self.media_player.mediaStatusChanged.connect(self.on_player_status_changed)
+            self.media_player.playbackStateChanged.connect(self.on_player_state_changed)
+
+    def on_table_double_clicked(self, index):
+        if not index.isValid(): return
+        row = index.row()
+        if 0 <= row < len(self.active_tracks):
+            self.play_track(self.active_tracks[row])
+
+    def play_track(self, track: Track):
+        self.current_playing_track = track
+        self.lcd_title.setText(track.title)
+        self.lcd_sub.setText(f"{track.artist} — {track.album}")
+        self.lcd_cur_time.setText("0:00")
+        self.lcd_tot_time.setText(track.formatted_duration())
+
+        phys = resolve_physical_path(self.current_mount, track.file_path)
+        if not os.path.exists(phys):
+            return
+
+        if self.media_player:
+            self.media_player.setSource(QUrl.fromLocalFile(phys))
+            self.media_player.play()
+        else:
+            self.statusBar().showMessage(f"Reproduciendo: {track.title} ({track.artist})")
+
+    def toggle_playback(self):
+        if self.media_player:
+            if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+                self.media_player.pause()
+            elif self.media_player.playbackState() == QMediaPlayer.PlaybackState.PausedState:
+                self.media_player.play()
+            else:
+                self.play_next_track()
+        else:
+            self.play_next_track()
+
+    def play_next_track(self):
+        if not self.active_tracks: return
+        cur_id = self.current_playing_track.id if self.current_playing_track else -1
+        idx = -1
+        for i, t in enumerate(self.active_tracks):
+            if t.id == cur_id:
+                idx = i
+                break
+        next_idx = (idx + 1) % len(self.active_tracks)
+        self.play_track(self.active_tracks[next_idx])
+        self.table.selectRow(next_idx)
+
+    def play_prev_track(self):
+        if not self.active_tracks: return
+        cur_id = self.current_playing_track.id if self.current_playing_track else -1
+        idx = -1
+        for i, t in enumerate(self.active_tracks):
+            if t.id == cur_id:
+                idx = i
+                break
+        prev_idx = (idx - 1 + len(self.active_tracks)) % len(self.active_tracks)
+        self.play_track(self.active_tracks[prev_idx])
+        self.table.selectRow(prev_idx)
+
+    def on_player_pos_changed(self, pos):
+        if not self.is_slider_seeking and self.current_playing_track and self.current_playing_track.duration_ms > 0:
+            tot = self.current_playing_track.duration_ms
+            self.lcd_cur_time.setText(self.fmt_ms(pos))
+            val = int((pos * 1000) / tot)
+            self.lcd_slider.blockSignals(True)
+            self.lcd_slider.setValue(val)
+            self.lcd_slider.blockSignals(False)
+
+    def on_player_dur_changed(self, dur):
+        if dur > 0:
+            self.lcd_tot_time.setText(self.fmt_ms(dur))
+
+    def on_player_status_changed(self, status):
+        if hasattr(QMediaPlayer.MediaStatus, 'EndOfMedia') and status == QMediaPlayer.MediaStatus.EndOfMedia:
+            self.play_next_track()
+
+    def on_player_state_changed(self, state):
+        if hasattr(QMediaPlayer.PlaybackState, 'PlayingState') and state == QMediaPlayer.PlaybackState.PlayingState:
+            self.btn_play.setText("⏸")
+        else:
+            self.btn_play.setText("▶")
+
+    def on_slider_pressed(self):
+        self.is_slider_seeking = True
+
+    def on_slider_released(self):
+        self.is_slider_seeking = False
+        if self.media_player and self.current_playing_track and self.current_playing_track.duration_ms > 0:
+            pos = int((self.lcd_slider.value() * self.current_playing_track.duration_ms) / 1000)
+            self.media_player.setPosition(pos)
+
+    def on_slider_moved(self, val):
+        if self.current_playing_track and self.current_playing_track.duration_ms > 0:
+            pos = int((val * self.current_playing_track.duration_ms) / 1000)
+            self.lcd_cur_time.setText(self.fmt_ms(pos))
+
+    def on_vol_changed(self, val):
+        if self.audio_output:
+            self.audio_output.setVolume(val / 100.0)
+
+    @staticmethod
+    def fmt_ms(ms):
+        secs = max(0, int(ms // 1000))
+        m = secs // 60
+        s = secs % 60
+        return f"{m}:{s:02d}"
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        paths = []
+        for url in event.mimeData().urls():
+            if url.isLocalFile():
+                paths.append(url.toLocalFile())
+        if paths:
+            self.handle_dropped_files(paths)
+
+    def handle_dropped_files(self, paths):
+        if not self.current_mount or self.current_mount == "demo" or not os.path.exists(self.current_mount):
+            QMessageBox.warning(self, "Sin iPod", "Conecta o selecciona un iPod antes de transferir canciones.")
+            return
+
+        supported_exts = {
+            "mp3", "m4a", "aac", "wav", "aif", "aiff",
+            "flac", "ogg", "opus", "wma", "ape", "wv"
+        }
+
+        audio_files = []
+        for p in paths:
+            if os.path.isdir(p):
+                for r, _, files in os.walk(p):
+                    for f in files:
+                        ext = f.split('.')[-1].lower()
+                        if ext in supported_exts:
+                            audio_files.append(os.path.join(r, f))
+            elif os.path.isfile(p):
+                ext = p.split('.')[-1].lower()
+                if ext in supported_exts:
+                    audio_files.append(p)
+
+        if not audio_files:
+            QMessageBox.information(self, "Sin audio", "No se detectaron archivos de audio válidos para transferir.")
+            return
+
+        incompat = []
+        compat = []
+        for f in audio_files:
+            ext = f.split('.')[-1].lower()
+            if ext in ("flac", "ogg", "opus", "wma", "ape", "wv"):
+                incompat.append(f)
+            else:
+                compat.append(f)
+
+        to_import = list(compat)
+
+        if incompat:
+            items_str = "\n".join([f"• {os.path.basename(x)}" for x in incompat[:6]])
+            res = QMessageBox.question(
+                self,
+                "Compatibilidad de Formatos",
+                f"Se detectaron {len(incompat)} canciones en formato incompatible con el iPod:\n\n{items_str}\n\n"
+                "¿Deseas convertirlas automáticamente a formato compatible (M4A / AAC) con FFmpeg?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if res == QMessageBox.StandardButton.Yes:
+                ffmpeg_bin = os.path.join(os.getcwd(), "tools", "ffmpeg.exe")
+                if not os.path.exists(ffmpeg_bin):
+                    ffmpeg_bin = "ffmpeg"
+
+                temp_dir = os.path.join(os.environ.get("TEMP", "."), "iPop_Converted")
+                os.makedirs(temp_dir, exist_ok=True)
+
+                for src in incompat:
+                    base = os.path.splitext(os.path.basename(src))[0]
+                    dest = os.path.join(temp_dir, f"{base}.m4a")
+                    cmd = [ffmpeg_bin, "-y", "-i", src, "-vn", "-c:a", "aac", "-b:a", "256k", "-ar", "44100", dest]
+                    try:
+                        r = subprocess.run(cmd, capture_output=True, timeout=60)
+                        if r.returncode == 0 and os.path.exists(dest):
+                            to_import.append(dest)
+                    except Exception as ex:
+                        print("Error convirtiendo:", ex)
+
+        if not to_import:
+            return
+
+        QMessageBox.information(
+            self,
+            "Transferencia",
+            f"Se prepararon {len(to_import)} canciones para transferir al iPod.\n"
+            "Para una sincronización física completa y binaria con recálculo de hash58, utiliza la versión nativa compilada (ipop.exe)."
+        )
 
     def refresh_devices(self):
         self.device_combo.blockSignals(True)
@@ -1018,14 +1689,18 @@ class MainWindow(QMainWindow):
         pl_branch = QTreeWidgetItem(root_item)
         pl_branch.setText(0, f"📑 Listas de reproducción ({len(user_pls)})")
 
+        self.tree.blockSignals(True)
         for pl in user_pls:
             pl_item = QTreeWidgetItem(pl_branch)
             pl_item.setText(0, f"🎶 {pl.name} ({len(pl.tracks)})")
             pl_item.setData(0, Qt.ItemDataRole.UserRole, ("playlist", pl))
+            pl_item.setFlags(pl_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            pl_item.setCheckState(0, Qt.CheckState.Unchecked)
 
         root_item.setExpanded(True)
         dev_branch.setExpanded(True)
         pl_branch.setExpanded(True)
+        self.tree.blockSignals(False)
 
         if user_pls:
             target_item = None
@@ -1041,6 +1716,7 @@ class MainWindow(QMainWindow):
         else:
             self.tree.setCurrentItem(item_music)
             self.on_tree_item_clicked(item_music, 0)
+        self.update_playlist_action_buttons()
 
     def on_tree_item_clicked(self, item: QTreeWidgetItem, column: int):
         data = item.data(0, Qt.ItemDataRole.UserRole)
@@ -1062,6 +1738,261 @@ class MainWindow(QMainWindow):
             self.view_sum_lbl.setText("0 elementos")
             self.active_tracks = []
             self.model.set_tracks([])
+        self.update_playlist_action_buttons()
+
+    def get_checked_playlist_indices(self) -> List[int]:
+        res = []
+        root = self.tree.invisibleRootItem()
+        def search(item):
+            d = item.data(0, Qt.ItemDataRole.UserRole)
+            if d and d[0] == "playlist" and d[1] and not d[1].is_master:
+                if item.checkState(0) == Qt.CheckState.Checked:
+                    try:
+                        idx = self.playlists.index(d[1])
+                        res.append(idx)
+                    except ValueError:
+                        pass
+            for i in range(item.childCount()):
+                search(item.child(i))
+        search(root)
+        return res
+
+    def update_playlist_action_buttons(self):
+        checked = self.get_checked_playlist_indices()
+        count = len(checked)
+
+        cur_item = self.tree.currentItem()
+        cur_data = cur_item.data(0, Qt.ItemDataRole.UserRole) if cur_item else None
+        has_single_focused_user_pl = False
+        if count == 0 and cur_data and cur_data[0] == "playlist" and cur_data[1] and not cur_data[1].is_master:
+            has_single_focused_user_pl = True
+
+        user_pls = [p for p in self.playlists if not p.is_master]
+        total_user_pls = len(user_pls)
+
+        if hasattr(self, 'btn_select_all_pl'):
+            all_checked = (total_user_pls > 0 and count == total_user_pls)
+            self.btn_select_all_pl.setText("☑️ Deselec." if all_checked else "☑️ Todas")
+            self.btn_select_all_pl.setEnabled(total_user_pls > 0)
+
+        can_edit = (count == 1) or has_single_focused_user_pl
+        if hasattr(self, 'btn_edit_pl'):
+            self.btn_edit_pl.setEnabled(can_edit)
+            if can_edit:
+                self.btn_edit_pl.setStyleSheet(
+                    "QPushButton { background-color: #2563EB; color: white; border-radius: 6px; padding: 5px 8px; font-size: 11px; font-weight: bold; } "
+                    "QPushButton:hover { background-color: #1D4ED8; }"
+                )
+            else:
+                self.btn_edit_pl.setStyleSheet(
+                    "QPushButton { background-color: #1E293B; color: #475569; border: 1px solid #334155; border-radius: 6px; padding: 5px 8px; font-size: 11px; font-weight: 500; } "
+                    "QPushButton:disabled { background-color: #1E293B; color: #475569; border: 1px solid #334155; }"
+                )
+
+        can_delete = (count >= 1) or has_single_focused_user_pl
+        if hasattr(self, 'btn_delete_pl'):
+            self.btn_delete_pl.setEnabled(can_delete)
+            if can_delete:
+                self.btn_delete_pl.setText(f"🗑️ Eliminar ({count})" if count > 1 else "🗑️ Eliminar")
+                self.btn_delete_pl.setStyleSheet(
+                    "QPushButton { background-color: #DC2626; color: white; border-radius: 6px; padding: 5px 8px; font-size: 11px; font-weight: bold; } "
+                    "QPushButton:hover { background-color: #B91C1C; }"
+                )
+            else:
+                self.btn_delete_pl.setText("🗑️ Eliminar")
+                self.btn_delete_pl.setStyleSheet(
+                    "QPushButton { background-color: #1E293B; color: #475569; border: 1px solid #334155; border-radius: 6px; padding: 5px 8px; font-size: 11px; font-weight: 500; } "
+                    "QPushButton:disabled { background-color: #1E293B; color: #475569; border: 1px solid #334155; }"
+                )
+
+    def on_tree_item_changed(self, item: QTreeWidgetItem, column: int):
+        self.update_playlist_action_buttons()
+
+    def on_tree_context_menu(self, pos):
+        if not self.current_mount or self.current_mount == "demo" or not os.path.exists(self.current_mount):
+            return
+
+        item = self.tree.itemAt(pos)
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            "QMenu { background-color: #1E293B; color: #F8FAFC; border: 1px solid #334155; padding: 4px; border-radius: 6px; font-size: 12px; } "
+            "QMenu::item { padding: 6px 20px 6px 12px; border-radius: 4px; } "
+            "QMenu::item:selected { background-color: #2563EB; color: white; } "
+            "QMenu::item:disabled { color: #64748B; }"
+        )
+
+        menu.addAction("➕ Nueva lista de reproducción...", self.on_new_playlist)
+
+        data = item.data(0, Qt.ItemDataRole.UserRole) if item else None
+        if data and data[0] == "playlist" and data[1] and not data[1].is_master:
+            pl = data[1]
+            try:
+                idx = self.playlists.index(pl)
+            except ValueError:
+                idx = -1
+
+            if idx > 0:
+                menu.addSeparator()
+                menu.addAction("✏️ Renombrar lista...", lambda: self.rename_playlist_by_index(idx))
+
+                checked = self.get_checked_playlist_indices()
+                if len(checked) > 1 and idx in checked:
+                    menu.addAction(f"🗑️ Eliminar {len(checked)} listas seleccionadas...", lambda: self.delete_playlists_by_indices(checked))
+                else:
+                    menu.addAction("🗑️ Eliminar lista...", lambda: self.delete_playlists_by_indices([idx]))
+
+        menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def on_toggle_select_all_playlists(self):
+        checked = self.get_checked_playlist_indices()
+        user_pls = [p for p in self.playlists if not p.is_master]
+        select_all = (len(checked) < len(user_pls))
+
+        self.tree.blockSignals(True)
+        root = self.tree.invisibleRootItem()
+        def set_checks(item):
+            d = item.data(0, Qt.ItemDataRole.UserRole)
+            if d and d[0] == "playlist" and d[1] and not d[1].is_master:
+                item.setCheckState(0, Qt.CheckState.Checked if select_all else Qt.CheckState.Unchecked)
+            for i in range(item.childCount()):
+                set_checks(item.child(i))
+        set_checks(root)
+        self.tree.blockSignals(False)
+
+        self.update_playlist_action_buttons()
+
+    def on_edit_selected_playlist(self):
+        checked = self.get_checked_playlist_indices()
+        target_idx = -1
+        if len(checked) == 1:
+            target_idx = checked[0]
+        elif len(checked) == 0:
+            cur = self.tree.currentItem()
+            d = cur.data(0, Qt.ItemDataRole.UserRole) if cur else None
+            if d and d[0] == "playlist" and d[1] and not d[1].is_master:
+                try:
+                    target_idx = self.playlists.index(d[1])
+                except ValueError:
+                    pass
+
+        if target_idx > 0:
+            self.rename_playlist_by_index(target_idx)
+
+    def rename_playlist_by_index(self, idx: int):
+        if not self.current_mount or idx <= 0 or idx >= len(self.playlists):
+            return
+
+        pl = self.playlists[idx]
+        new_name, ok = QInputDialog.getText(
+            self,
+            "Renombrar lista de reproducción",
+            f"Nuevo nombre para '{pl.name}':",
+            QLineEdit.EchoMode.Normal,
+            pl.name
+        )
+
+        if not ok:
+            return
+        new_name = new_name.strip()
+        if not new_name or new_name == pl.name:
+            return
+
+        itunesdb_p = os.path.join(self.current_mount, "iPod_Control", "iTunes", "iTunesDB")
+        if not os.path.exists(itunesdb_p):
+            itunesdb_p = os.path.join(self.current_mount, "ipod_control", "itunes", "itunesdb")
+
+        if os.path.exists(itunesdb_p):
+            success = rename_playlist_in_itunesdb(itunesdb_p, idx, new_name)
+            if success:
+                self.load_real_device(self.current_mount)
+                self.select_playlist_by_id(pl.id)
+                self.statusBar().showMessage(f"Lista renombrada a '{new_name}'", 3000)
+            else:
+                QMessageBox.warning(self, "Error", "No se pudo renombrar la lista en la base de datos.")
+
+    def on_delete_selected_playlists(self):
+        checked = self.get_checked_playlist_indices()
+        if not checked:
+            cur = self.tree.currentItem()
+            d = cur.data(0, Qt.ItemDataRole.UserRole) if cur else None
+            if d and d[0] == "playlist" and d[1] and not d[1].is_master:
+                try:
+                    checked.append(self.playlists.index(d[1]))
+                except ValueError:
+                    pass
+
+        if checked:
+            self.delete_playlists_by_indices(checked)
+
+    def delete_playlists_by_indices(self, indices: List[int]):
+        valid_indices = [i for i in indices if i > 0 and i < len(self.playlists)]
+        if not valid_indices or not self.current_mount:
+            return
+
+        if len(valid_indices) == 1:
+            name = self.playlists[valid_indices[0]].name
+            confirm_text = f"¿Estás seguro de que deseas eliminar la lista de reproducción \"{name}\" del iPod?\n\n(Las canciones permanecerán intactas en el iPod)."
+        else:
+            confirm_text = f"¿Estás seguro de que deseas eliminar las {len(valid_indices)} listas de reproducción seleccionadas del iPod?\n\n(Las canciones permanecerán intactas en el iPod)."
+
+        reply = QMessageBox.question(
+            self,
+            "Eliminar listas de reproducción",
+            confirm_text,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        itunesdb_p = os.path.join(self.current_mount, "iPod_Control", "iTunes", "iTunesDB")
+        if not os.path.exists(itunesdb_p):
+            itunesdb_p = os.path.join(self.current_mount, "ipod_control", "itunes", "itunesdb")
+
+        if os.path.exists(itunesdb_p):
+            success = delete_playlists_from_itunesdb(itunesdb_p, set(valid_indices))
+            if success:
+                self.load_real_device(self.current_mount)
+                master_pl = next((p for p in self.playlists if p.is_master), None)
+                if master_pl:
+                    self.select_playlist_by_id(master_pl.id)
+                self.statusBar().showMessage(f"{len(valid_indices)} lista(s) de reproducción eliminada(s).", 3000)
+            else:
+                QMessageBox.critical(self, "Error", "No se pudieron eliminar las listas de reproducción de la base de datos.")
+
+    def on_new_playlist(self):
+        if not self.current_mount or self.current_mount == "demo" or not os.path.exists(self.current_mount):
+            QMessageBox.information(self, "Aviso", "Conecta o selecciona un iPod primero.")
+            return
+
+        name, ok = QInputDialog.getText(
+            self,
+            "Nueva lista de reproducción",
+            "Nombre de la nueva lista:",
+            QLineEdit.EchoMode.Normal,
+            "Nueva lista"
+        )
+        if not ok:
+            return
+        name = name.strip()
+        if not name:
+            return
+
+        itunesdb_p = os.path.join(self.current_mount, "iPod_Control", "iTunes", "iTunesDB")
+        if not os.path.exists(itunesdb_p):
+            itunesdb_p = os.path.join(self.current_mount, "ipod_control", "itunes", "itunesdb")
+
+        if os.path.exists(itunesdb_p):
+            success = create_playlist_in_itunesdb(itunesdb_p, name)
+            if success:
+                self.load_real_device(self.current_mount)
+                for pl in reversed(self.playlists):
+                    if pl.name == name:
+                        self.select_playlist_by_id(pl.id)
+                        break
+                self.statusBar().showMessage(f"Lista \"{name}\" creada con éxito.", 3000)
+            else:
+                QMessageBox.warning(self, "Error", "No se pudo crear la nueva lista en la base de datos.")
 
     def toggle_select_all(self):
         self.all_selected = not self.all_selected
@@ -1133,25 +2064,115 @@ class MainWindow(QMainWindow):
         id_set = set(ids)
         saved_pl_id = self.current_playlist_ref.id if self.current_playlist_ref else None
 
+        total_bytes = sum(self.all_tracks[uid].size_bytes for uid in ids if uid in self.all_tracks)
+        tot_mb = total_bytes / (1024.0 * 1024.0)
+
+        # Diálogo de progreso elegante con barra completando desde 0.0 MB a X.X MB
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Eliminando canciones del iPod")
+        dlg.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.CustomizeWindowHint | Qt.WindowType.WindowTitleHint)
+        dlg.setFixedSize(500, 200)
+        dlg.setStyleSheet("background-color: #1E293B; border: 1px solid #334155; border-radius: 12px;")
+
+        d_layout = QVBoxLayout(dlg)
+        d_layout.setContentsMargins(22, 18, 22, 18)
+        d_layout.setSpacing(12)
+
+        header_layout = QHBoxLayout()
+        header_layout.setSpacing(10)
+        icon_lbl = QLabel("🗑️", dlg)
+        icon_lbl.setStyleSheet("font-size: 22px;")
+        header_layout.addWidget(icon_lbl)
+
+        title_lbl = QLabel("Eliminando del iPod...", dlg)
+        title_lbl.setStyleSheet("color: #F8FAFC; font-size: 16px; font-weight: bold;")
+        header_layout.addWidget(title_lbl, 1)
+
+        badge_lbl = QLabel(f"0.0 MB a {tot_mb:.1f} MB", dlg)
+        badge_lbl.setStyleSheet(
+            "background-color: #0F172A; color: #38BDF8; font-size: 12px; font-weight: bold; "
+            "padding: 4px 10px; border-radius: 6px; border: 1px solid #334155;"
+        )
+        header_layout.addWidget(badge_lbl)
+        d_layout.addLayout(header_layout)
+
+        status_lbl = QLabel(f"Iniciando eliminación de {len(ids)} canciones...", dlg)
+        status_lbl.setStyleSheet("color: #94A3B8; font-size: 13px;")
+        status_lbl.setWordWrap(True)
+        d_layout.addWidget(status_lbl)
+
+        pbar = QProgressBar(dlg)
+        pbar.setRange(0, 1000)
+        pbar.setValue(0)
+        pbar.setFixedHeight(22)
+        pbar.setTextVisible(False)
+        pbar.setStyleSheet(
+            "QProgressBar { background-color: #0F172A; border: 1px solid #334155; border-radius: 6px; } "
+            "QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #2563EB, stop:1 #38BDF8); border-radius: 5px; }"
+        )
+        d_layout.addWidget(pbar)
+
+        info_layout = QHBoxLayout()
+        mb_lbl = QLabel(f"Progreso: 0.0 MB / {tot_mb:.1f} MB (0%)", dlg)
+        mb_lbl.setStyleSheet("color: #F8FAFC; font-size: 12px; font-weight: 600;")
+        info_layout.addWidget(mb_lbl)
+        info_layout.addStretch()
+        d_layout.addLayout(info_layout)
+
+        dlg.show()
+        QApplication.processEvents()
+
+        current_bytes = 0
+        track_counter = 0
+
         # 1. Borrar archivos físicos del almacenamiento masivo del iPod
         for uid in ids:
-            if uid in self.all_tracks:
-                t = self.all_tracks[uid]
-                if t.file_path:
-                    clean = t.file_path.lstrip(':')
-                    parts = clean.split(':')
-                    real_path = os.path.join(self.current_mount, *parts)
-                    if os.path.exists(real_path):
-                        try:
-                            os.remove(real_path)
-                            deleted_files += 1
-                        except Exception as e:
-                            print(f"Error borrando {real_path}: {e}")
+            track_counter += 1
+            t = self.all_tracks.get(uid)
+            track_title = t.title if t else f"ID {uid}"
+            status_lbl.setText(f"Borrando ({track_counter}/{len(ids)}): {track_title}")
+            QApplication.processEvents()
+
+            if t and t.file_path:
+                clean = t.file_path.lstrip(':')
+                parts = clean.split(':')
+                real_path = os.path.join(self.current_mount, *parts)
+                if os.path.exists(real_path):
+                    try:
+                        os.remove(real_path)
+                        deleted_files += 1
+                    except Exception as e:
+                        print(f"Error borrando {real_path}: {e}")
+
+            if t:
+                current_bytes += t.size_bytes
+
+            curr_mb = current_bytes / (1024.0 * 1024.0)
+            frac = (current_bytes / total_bytes) if total_bytes > 0 else 1.0
+            frac = min(1.0, max(0.0, frac))
+            pbar.setValue(int(frac * 1000))
+            pct = int(frac * 100)
+            mb_lbl.setText(f"Progreso: {curr_mb:.1f} MB / {tot_mb:.1f} MB ({pct}%)")
+            QApplication.processEvents()
+            time.sleep(0.035)
 
         # 2. Modificar, firmar con hash58 y guardar físicamente el archivo iTunesDB en el iPod
+        status_lbl.setText("Actualizando base de datos iTunesDB y firma hash58...")
+        QApplication.processEvents()
+
         itunesdb_p = os.path.join(self.current_mount, "iPod_Control", "iTunes", "iTunesDB")
         if os.path.exists(itunesdb_p):
             remove_tracks_from_itunesdb(itunesdb_p, id_set)
+
+        status_lbl.setText("Vaciando búferes a la memoria flash del iPod...")
+        QApplication.processEvents()
+        pbar.setValue(1000)
+        mb_lbl.setText(f"Progreso: {tot_mb:.1f} MB / {tot_mb:.1f} MB (100%)")
+        title_lbl.setText("¡Completado!")
+        status_lbl.setText("¡Canciones eliminadas físicamente del disco con éxito!")
+        QApplication.processEvents()
+        time.sleep(0.4)
+        dlg.close()
 
         # 3. Recargar el iPod y restaurar la vista seleccionada
         self.load_real_device(self.current_mount)
@@ -1165,7 +2186,131 @@ class MainWindow(QMainWindow):
         )
 
     def eject_device(self):
-        QMessageBox.information(self, "Expulsar", "Dispositivo listo para desconectar de forma segura.")
+        mount = getattr(self, "current_mount", None)
+        if not mount or mount == "demo" or not os.path.exists(mount):
+            QMessageBox.information(self, "Expulsar", "No hay ningún iPod físico conectado para expulsar.")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Expulsar iPod",
+            f"¿Deseas expulsar con seguridad el iPod en '{mount}'?\n\n"
+            "La base de datos se sincronizará y el iPod cambiará su pantalla a 'Aceptable desconectar' (OK to disconnect) o al menú principal de música.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self.statusBar().showMessage("Sincronizando y expulsando dispositivo...")
+        QApplication.processEvents()
+
+        ok, err_msg = self.perform_eject(mount)
+        if ok:
+            QMessageBox.information(
+                self,
+                "iPod Expulsado",
+                "El iPod ha sido expulsado con seguridad.\n\n"
+                "En la pantalla del iPod aparecerá 'Aceptable desconectar' (OK to disconnect) o el menú principal de música. Ya puedes retirar el cable con total seguridad."
+            )
+            self.refresh_devices()
+        else:
+            QMessageBox.warning(
+                self,
+                "Error al expulsar",
+                f"No se pudo expulsar automáticamente el iPod:\n{err_msg}\n\n"
+                "Asegúrate de que iTunes no esté en ejecución ni haya carpetas abiertas en el Explorador de archivos."
+            )
+
+    def perform_eject(self, mount_path: str):
+        import platform
+        if platform.system() != "Windows":
+            import subprocess
+            try:
+                subprocess.run(["sync"], check=False)
+                res = subprocess.run(["eject", mount_path], check=False)
+                if res.returncode == 0:
+                    return True, ""
+                res2 = subprocess.run(["umount", mount_path], check=False)
+                return res2.returncode == 0, ""
+            except Exception as e:
+                return False, str(e)
+
+        import ctypes
+        from ctypes import wintypes
+        import time
+
+        clean_path = mount_path.strip()
+        letter = clean_path[0].upper()
+        vol_path = f"\\\\.\\{letter}:"
+
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        GENERIC_READ = 0x80000000
+        GENERIC_WRITE = 0x40000000
+        FILE_SHARE_READ = 1
+        FILE_SHARE_WRITE = 2
+        OPEN_EXISTING = 3
+
+        FSCTL_LOCK_VOLUME = 0x00090018
+        FSCTL_DISMOUNT_VOLUME = 0x00090020
+        IOCTL_STORAGE_MEDIA_REMOVAL = 0x002D4804
+        IOCTL_STORAGE_EJECT_MEDIA = 0x002D4808
+
+        h = kernel32.CreateFileW(
+            vol_path,
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            None,
+            OPEN_EXISTING,
+            0,
+            None
+        )
+        if h == -1:
+            h = kernel32.CreateFileW(
+                vol_path,
+                GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                None,
+                OPEN_EXISTING,
+                0,
+                None
+            )
+
+        if h == -1:
+            err = ctypes.get_last_error()
+            return False, f"No se pudo obtener acceso exclusivo al volumen {letter}: (Código de error {err})"
+
+        kernel32.FlushFileBuffers(h)
+
+        dw = wintypes.DWORD(0)
+        for _ in range(5):
+            if kernel32.DeviceIoControl(h, FSCTL_LOCK_VOLUME, None, 0, None, 0, ctypes.byref(dw), None):
+                break
+            time.sleep(0.2)
+
+        kernel32.DeviceIoControl(h, FSCTL_DISMOUNT_VOLUME, None, 0, None, 0, ctypes.byref(dw), None)
+
+        class PREVENT_MEDIA_REMOVAL(ctypes.Structure):
+            _fields_ = [('PreventMediaRemoval', ctypes.c_bool)]
+        pmr = PREVENT_MEDIA_REMOVAL(False)
+        kernel32.DeviceIoControl(h, IOCTL_STORAGE_MEDIA_REMOVAL, ctypes.byref(pmr), ctypes.sizeof(pmr), None, 0, ctypes.byref(dw), None)
+
+        # Enviar comando de expulsión SCSI (START STOP UNIT LoEj=1)
+        kernel32.DeviceIoControl(h, IOCTL_STORAGE_EJECT_MEDIA, None, 0, None, 0, ctypes.byref(dw), None)
+        kernel32.CloseHandle(h)
+
+        # Notificar también al Shell de Windows
+        import subprocess
+        ps_cmd = (
+            f"$sh = New-Object -ComObject Shell.Application; "
+            f"$item = $sh.Namespace(17).ParseName('{letter}:'); "
+            f"if ($item) {{ foreach ($v in $item.Verbs()) {{ if ($v.Name.Replace('&','') -match '(?i)expulsar|eject') {{ $v.DoIt(); break }} }} }}"
+        )
+        try:
+            subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_cmd], capture_output=True, timeout=3)
+        except Exception:
+            pass
+
+        return True, ""
 
 
 def main():

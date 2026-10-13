@@ -50,12 +50,24 @@ template <> constexpr inline auto MainWindow::qt_create_metaobjectdata<qt_meta_t
         "QTreeWidgetItem*",
         "item",
         "column",
+        "onTreeItemChanged",
+        "onTreeContextMenu",
+        "QPoint",
+        "pos",
         "onToggleSelectAll",
         "onDeleteSelectedTracks",
         "onFilterTracks",
         "query",
         "onSelectionChanged",
-        "selectedCount"
+        "selectedCount",
+        "onTrackDoubleClicked",
+        "QModelIndex",
+        "onPlayerNextTrack",
+        "onPlayerPrevTrack",
+        "onToggleSelectAllPlaylists",
+        "onEditSelectedPlaylist",
+        "onDeleteSelectedPlaylists",
+        "onNewPlaylist"
     };
 
     QtMocHelpers::UintData qt_methods {
@@ -73,18 +85,42 @@ template <> constexpr inline auto MainWindow::qt_create_metaobjectdata<qt_meta_t
         QtMocHelpers::SlotData<void(QTreeWidgetItem *, int)>(7, 2, QMC::AccessPrivate, QMetaType::Void, {{
             { 0x80000000 | 8, 9 }, { QMetaType::Int, 10 },
         }}),
+        // Slot 'onTreeItemChanged'
+        QtMocHelpers::SlotData<void(QTreeWidgetItem *, int)>(11, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { 0x80000000 | 8, 9 }, { QMetaType::Int, 10 },
+        }}),
+        // Slot 'onTreeContextMenu'
+        QtMocHelpers::SlotData<void(const QPoint &)>(12, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { 0x80000000 | 13, 14 },
+        }}),
         // Slot 'onToggleSelectAll'
-        QtMocHelpers::SlotData<void()>(11, 2, QMC::AccessPrivate, QMetaType::Void),
+        QtMocHelpers::SlotData<void()>(15, 2, QMC::AccessPrivate, QMetaType::Void),
         // Slot 'onDeleteSelectedTracks'
-        QtMocHelpers::SlotData<void()>(12, 2, QMC::AccessPrivate, QMetaType::Void),
+        QtMocHelpers::SlotData<void()>(16, 2, QMC::AccessPrivate, QMetaType::Void),
         // Slot 'onFilterTracks'
-        QtMocHelpers::SlotData<void(const QString &)>(13, 2, QMC::AccessPrivate, QMetaType::Void, {{
-            { QMetaType::QString, 14 },
+        QtMocHelpers::SlotData<void(const QString &)>(17, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { QMetaType::QString, 18 },
         }}),
         // Slot 'onSelectionChanged'
-        QtMocHelpers::SlotData<void(int)>(15, 2, QMC::AccessPrivate, QMetaType::Void, {{
-            { QMetaType::Int, 16 },
+        QtMocHelpers::SlotData<void(int)>(19, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { QMetaType::Int, 20 },
         }}),
+        // Slot 'onTrackDoubleClicked'
+        QtMocHelpers::SlotData<void(const QModelIndex &)>(21, 2, QMC::AccessPrivate, QMetaType::Void, {{
+            { 0x80000000 | 22, 5 },
+        }}),
+        // Slot 'onPlayerNextTrack'
+        QtMocHelpers::SlotData<void()>(23, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'onPlayerPrevTrack'
+        QtMocHelpers::SlotData<void()>(24, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'onToggleSelectAllPlaylists'
+        QtMocHelpers::SlotData<void()>(25, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'onEditSelectedPlaylist'
+        QtMocHelpers::SlotData<void()>(26, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'onDeleteSelectedPlaylists'
+        QtMocHelpers::SlotData<void()>(27, 2, QMC::AccessPrivate, QMetaType::Void),
+        // Slot 'onNewPlaylist'
+        QtMocHelpers::SlotData<void()>(28, 2, QMC::AccessPrivate, QMetaType::Void),
     };
     QtMocHelpers::UintData qt_properties {
     };
@@ -113,10 +149,19 @@ void MainWindow::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _id, 
         case 2: _t->onDeviceSelected((*reinterpret_cast<std::add_pointer_t<int>>(_a[1]))); break;
         case 3: _t->onEjectDevice(); break;
         case 4: _t->onTreeItemClicked((*reinterpret_cast<std::add_pointer_t<QTreeWidgetItem*>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<int>>(_a[2]))); break;
-        case 5: _t->onToggleSelectAll(); break;
-        case 6: _t->onDeleteSelectedTracks(); break;
-        case 7: _t->onFilterTracks((*reinterpret_cast<std::add_pointer_t<QString>>(_a[1]))); break;
-        case 8: _t->onSelectionChanged((*reinterpret_cast<std::add_pointer_t<int>>(_a[1]))); break;
+        case 5: _t->onTreeItemChanged((*reinterpret_cast<std::add_pointer_t<QTreeWidgetItem*>>(_a[1])),(*reinterpret_cast<std::add_pointer_t<int>>(_a[2]))); break;
+        case 6: _t->onTreeContextMenu((*reinterpret_cast<std::add_pointer_t<QPoint>>(_a[1]))); break;
+        case 7: _t->onToggleSelectAll(); break;
+        case 8: _t->onDeleteSelectedTracks(); break;
+        case 9: _t->onFilterTracks((*reinterpret_cast<std::add_pointer_t<QString>>(_a[1]))); break;
+        case 10: _t->onSelectionChanged((*reinterpret_cast<std::add_pointer_t<int>>(_a[1]))); break;
+        case 11: _t->onTrackDoubleClicked((*reinterpret_cast<std::add_pointer_t<QModelIndex>>(_a[1]))); break;
+        case 12: _t->onPlayerNextTrack(); break;
+        case 13: _t->onPlayerPrevTrack(); break;
+        case 14: _t->onToggleSelectAllPlaylists(); break;
+        case 15: _t->onEditSelectedPlaylist(); break;
+        case 16: _t->onDeleteSelectedPlaylists(); break;
+        case 17: _t->onNewPlaylist(); break;
         default: ;
         }
     }
@@ -141,14 +186,14 @@ int MainWindow::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
     if (_id < 0)
         return _id;
     if (_c == QMetaObject::InvokeMetaMethod) {
-        if (_id < 9)
+        if (_id < 18)
             qt_static_metacall(this, _c, _id, _a);
-        _id -= 9;
+        _id -= 18;
     }
     if (_c == QMetaObject::RegisterMethodArgumentMetaType) {
-        if (_id < 9)
+        if (_id < 18)
             *reinterpret_cast<QMetaType *>(_a[0]) = QMetaType();
-        _id -= 9;
+        _id -= 18;
     }
     return _id;
 }

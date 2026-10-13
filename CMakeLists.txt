@@ -17,6 +17,7 @@ find_package(Qt6 6.2 REQUIRED COMPONENTS
     Core
     Gui
     Widgets
+    Multimedia
 )
 
 set(IPOP_SOURCES
@@ -37,6 +38,14 @@ set(IPOP_SOURCES
     src/ui/TrackTableModel.cpp
     src/ui/MainWindow.h
     src/ui/MainWindow.cpp
+    src/ui/DeleteProgressDialog.h
+    src/ui/DeleteProgressDialog.cpp
+    src/core/AudioConverter.h
+    src/core/AudioConverter.cpp
+    src/core/TrackImporter.h
+    src/core/TrackImporter.cpp
+    src/ui/ITunesPlayerWidget.h
+    src/ui/ITunesPlayerWidget.cpp
 )
 
 add_executable(ipop ${IPOP_SOURCES})
@@ -51,6 +60,7 @@ target_link_libraries(ipop PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
+    Qt6::Multimedia
 )
 
 # Opciones de compilación

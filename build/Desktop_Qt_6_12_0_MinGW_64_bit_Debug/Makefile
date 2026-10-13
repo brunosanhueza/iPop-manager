@@ -223,6 +223,30 @@ ipop_autogen/mocs_compilation.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\ipop.dir\build.make CMakeFiles/ipop.dir/ipop_autogen/mocs_compilation.cpp.s
 .PHONY : ipop_autogen/mocs_compilation.cpp.s
 
+src/core/AudioConverter.obj: src/core/AudioConverter.cpp.obj
+.PHONY : src/core/AudioConverter.obj
+
+# target to build an object file
+src/core/AudioConverter.cpp.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\ipop.dir\build.make CMakeFiles/ipop.dir/src/core/AudioConverter.cpp.obj
+.PHONY : src/core/AudioConverter.cpp.obj
+
+src/core/AudioConverter.i: src/core/AudioConverter.cpp.i
+.PHONY : src/core/AudioConverter.i
+
+# target to preprocess a source file
+src/core/AudioConverter.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\ipop.dir\build.make CMakeFiles/ipop.dir/src/core/AudioConverter.cpp.i
+.PHONY : src/core/AudioConverter.cpp.i
+
+src/core/AudioConverter.s: src/core/AudioConverter.cpp.s
+.PHONY : src/core/AudioConverter.s
+
+# target to generate assembly for a file
+src/core/AudioConverter.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\ipop.dir\build.make CMakeFiles/ipop.dir/src/core/AudioConverter.cpp.s
+.PHONY : src/core/AudioConverter.cpp.s
+
 src/core/DeviceDetector.obj: src/core/DeviceDetector.cpp.obj
 .PHONY : src/core/DeviceDetector.obj
 
@@ -319,6 +343,30 @@ src/core/ITunesHash58.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\ipop.dir\build.make CMakeFiles/ipop.dir/src/core/ITunesHash58.cpp.s
 .PHONY : src/core/ITunesHash58.cpp.s
 
+src/core/TrackImporter.obj: src/core/TrackImporter.cpp.obj
+.PHONY : src/core/TrackImporter.obj
+
+# target to build an object file
+src/core/TrackImporter.cpp.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\ipop.dir\build.make CMakeFiles/ipop.dir/src/core/TrackImporter.cpp.obj
+.PHONY : src/core/TrackImporter.cpp.obj
+
+src/core/TrackImporter.i: src/core/TrackImporter.cpp.i
+.PHONY : src/core/TrackImporter.i
+
+# target to preprocess a source file
+src/core/TrackImporter.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\ipop.dir\build.make CMakeFiles/ipop.dir/src/core/TrackImporter.cpp.i
+.PHONY : src/core/TrackImporter.cpp.i
+
+src/core/TrackImporter.s: src/core/TrackImporter.cpp.s
+.PHONY : src/core/TrackImporter.s
+
+# target to generate assembly for a file
+src/core/TrackImporter.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\ipop.dir\build.make CMakeFiles/ipop.dir/src/core/TrackImporter.cpp.s
+.PHONY : src/core/TrackImporter.cpp.s
+
 src/main.obj: src/main.cpp.obj
 .PHONY : src/main.obj
 
@@ -366,6 +414,54 @@ src/ui/CapacityBar.s: src/ui/CapacityBar.cpp.s
 src/ui/CapacityBar.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles\ipop.dir\build.make CMakeFiles/ipop.dir/src/ui/CapacityBar.cpp.s
 .PHONY : src/ui/CapacityBar.cpp.s
+
+src/ui/DeleteProgressDialog.obj: src/ui/DeleteProgressDialog.cpp.obj
+.PHONY : src/ui/DeleteProgressDialog.obj
+
+# target to build an object file
+src/ui/DeleteProgressDialog.cpp.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\ipop.dir\build.make CMakeFiles/ipop.dir/src/ui/DeleteProgressDialog.cpp.obj
+.PHONY : src/ui/DeleteProgressDialog.cpp.obj
+
+src/ui/DeleteProgressDialog.i: src/ui/DeleteProgressDialog.cpp.i
+.PHONY : src/ui/DeleteProgressDialog.i
+
+# target to preprocess a source file
+src/ui/DeleteProgressDialog.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\ipop.dir\build.make CMakeFiles/ipop.dir/src/ui/DeleteProgressDialog.cpp.i
+.PHONY : src/ui/DeleteProgressDialog.cpp.i
+
+src/ui/DeleteProgressDialog.s: src/ui/DeleteProgressDialog.cpp.s
+.PHONY : src/ui/DeleteProgressDialog.s
+
+# target to generate assembly for a file
+src/ui/DeleteProgressDialog.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\ipop.dir\build.make CMakeFiles/ipop.dir/src/ui/DeleteProgressDialog.cpp.s
+.PHONY : src/ui/DeleteProgressDialog.cpp.s
+
+src/ui/ITunesPlayerWidget.obj: src/ui/ITunesPlayerWidget.cpp.obj
+.PHONY : src/ui/ITunesPlayerWidget.obj
+
+# target to build an object file
+src/ui/ITunesPlayerWidget.cpp.obj:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\ipop.dir\build.make CMakeFiles/ipop.dir/src/ui/ITunesPlayerWidget.cpp.obj
+.PHONY : src/ui/ITunesPlayerWidget.cpp.obj
+
+src/ui/ITunesPlayerWidget.i: src/ui/ITunesPlayerWidget.cpp.i
+.PHONY : src/ui/ITunesPlayerWidget.i
+
+# target to preprocess a source file
+src/ui/ITunesPlayerWidget.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\ipop.dir\build.make CMakeFiles/ipop.dir/src/ui/ITunesPlayerWidget.cpp.i
+.PHONY : src/ui/ITunesPlayerWidget.cpp.i
+
+src/ui/ITunesPlayerWidget.s: src/ui/ITunesPlayerWidget.cpp.s
+.PHONY : src/ui/ITunesPlayerWidget.s
+
+# target to generate assembly for a file
+src/ui/ITunesPlayerWidget.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles\ipop.dir\build.make CMakeFiles/ipop.dir/src/ui/ITunesPlayerWidget.cpp.s
+.PHONY : src/ui/ITunesPlayerWidget.cpp.s
 
 src/ui/MainWindow.obj: src/ui/MainWindow.cpp.obj
 .PHONY : src/ui/MainWindow.obj
@@ -433,6 +529,9 @@ help:
 	@echo ... ipop_autogen/mocs_compilation.obj
 	@echo ... ipop_autogen/mocs_compilation.i
 	@echo ... ipop_autogen/mocs_compilation.s
+	@echo ... src/core/AudioConverter.obj
+	@echo ... src/core/AudioConverter.i
+	@echo ... src/core/AudioConverter.s
 	@echo ... src/core/DeviceDetector.obj
 	@echo ... src/core/DeviceDetector.i
 	@echo ... src/core/DeviceDetector.s
@@ -445,12 +544,21 @@ help:
 	@echo ... src/core/ITunesHash58.obj
 	@echo ... src/core/ITunesHash58.i
 	@echo ... src/core/ITunesHash58.s
+	@echo ... src/core/TrackImporter.obj
+	@echo ... src/core/TrackImporter.i
+	@echo ... src/core/TrackImporter.s
 	@echo ... src/main.obj
 	@echo ... src/main.i
 	@echo ... src/main.s
 	@echo ... src/ui/CapacityBar.obj
 	@echo ... src/ui/CapacityBar.i
 	@echo ... src/ui/CapacityBar.s
+	@echo ... src/ui/DeleteProgressDialog.obj
+	@echo ... src/ui/DeleteProgressDialog.i
+	@echo ... src/ui/DeleteProgressDialog.s
+	@echo ... src/ui/ITunesPlayerWidget.obj
+	@echo ... src/ui/ITunesPlayerWidget.i
+	@echo ... src/ui/ITunesPlayerWidget.s
 	@echo ... src/ui/MainWindow.obj
 	@echo ... src/ui/MainWindow.i
 	@echo ... src/ui/MainWindow.s

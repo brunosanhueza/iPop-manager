@@ -15,6 +15,7 @@
 #include "../core/DeviceDetector.h"
 #include "CapacityBar.h"
 #include "TrackTableModel.h"
+#include "ITunesPlayerWidget.h"
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -29,10 +30,24 @@ private slots:
     void onDeviceSelected(int index);
     void onEjectDevice();
     void onTreeItemClicked(QTreeWidgetItem* item, int column);
+    void onTreeItemChanged(QTreeWidgetItem* item, int column);
+    void onTreeContextMenu(const QPoint& pos);
     void onToggleSelectAll();
     void onDeleteSelectedTracks();
     void onFilterTracks(const QString& query);
     void onSelectionChanged(int selectedCount);
+    void onTrackDoubleClicked(const QModelIndex& index);
+    void onPlayerNextTrack();
+    void onPlayerPrevTrack();
+    void onToggleSelectAllPlaylists();
+    void onEditSelectedPlaylist();
+    void onDeleteSelectedPlaylists();
+    void onNewPlaylist();
+
+protected:
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dragMoveEvent(QDragMoveEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
 
 private:
     void setupUi();
@@ -42,12 +57,18 @@ private:
     void checkITunesStatus();
     static bool isITunesRunning();
     static bool killITunesProcess();
+    void handleDroppedFiles(const QStringList& filePaths);
+    QList<int> getCheckedPlaylistIndices() const;
+    void updatePlaylistActionButtons();
+    void renamePlaylistByIndex(int idx);
+    void deletePlaylistsByIndices(const QList<int>& indices);
 
     // Core
     DeviceDetector m_detector;
     std::unique_ptr<IPodDevice> m_currentDevice;
     int m_currentPlaylistIndex{-1};
     bool m_allSelected{false};
+    bool m_allPlaylistsChecked{false};
     QList<Track> m_activeTracks;
 
     // UI Widgets - Top Bar
@@ -56,9 +77,14 @@ private:
     QPushButton* m_browseBtn{nullptr};
     QPushButton* m_ejectBtn{nullptr};
     QFrame* m_itunesWarningFrame{nullptr};
+    ITunesPlayerWidget* m_playerWidget{nullptr};
 
     // UI Widgets - Árbol Organizador (Sidebar Izquierda)
     QTreeWidget* m_treeOrganizer{nullptr};
+    QPushButton* m_newPlBtn{nullptr};
+    QPushButton* m_selectAllPlBtn{nullptr};
+    QPushButton* m_editPlBtn{nullptr};
+    QPushButton* m_deletePlBtn{nullptr};
 
     // UI Widgets - Canciones (Panel Derecho)
     QLabel* m_viewTitleLabel{nullptr};

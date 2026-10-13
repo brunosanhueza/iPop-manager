@@ -210,6 +210,66 @@ CMakeFiles/ipop.dir/src/ui/MainWindow.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/ipop.dir/src/ui/MainWindow.cpp.s"
 	C:\Qt\Tools\mingw1310_64\bin\g++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S C:\Users\Zacky\Desktop\iPop\src\ui\MainWindow.cpp -o CMakeFiles\ipop.dir\src\ui\MainWindow.cpp.s
 
+CMakeFiles/ipop.dir/src/ui/DeleteProgressDialog.cpp.obj: CMakeFiles/ipop.dir/flags.make
+CMakeFiles/ipop.dir/src/ui/DeleteProgressDialog.cpp.obj: CMakeFiles/ipop.dir/includes_CXX.rsp
+CMakeFiles/ipop.dir/src/ui/DeleteProgressDialog.cpp.obj: C:/Users/Zacky/Desktop/iPop/src/ui/DeleteProgressDialog.cpp
+CMakeFiles/ipop.dir/src/ui/DeleteProgressDialog.cpp.obj: CMakeFiles/ipop.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=C:\Users\Zacky\Desktop\iPop\build\Desktop_Qt_6_12_0_MinGW_64_bit_Debug\CMakeFiles --progress-num=$(CMAKE_PROGRESS_11) "Building CXX object CMakeFiles/ipop.dir/src/ui/DeleteProgressDialog.cpp.obj"
+	C:\Qt\Tools\mingw1310_64\bin\g++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/ipop.dir/src/ui/DeleteProgressDialog.cpp.obj -MF CMakeFiles\ipop.dir\src\ui\DeleteProgressDialog.cpp.obj.d -o CMakeFiles\ipop.dir\src\ui\DeleteProgressDialog.cpp.obj -c C:\Users\Zacky\Desktop\iPop\src\ui\DeleteProgressDialog.cpp
+
+CMakeFiles/ipop.dir/src/ui/DeleteProgressDialog.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/ipop.dir/src/ui/DeleteProgressDialog.cpp.i"
+	C:\Qt\Tools\mingw1310_64\bin\g++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E C:\Users\Zacky\Desktop\iPop\src\ui\DeleteProgressDialog.cpp > CMakeFiles\ipop.dir\src\ui\DeleteProgressDialog.cpp.i
+
+CMakeFiles/ipop.dir/src/ui/DeleteProgressDialog.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/ipop.dir/src/ui/DeleteProgressDialog.cpp.s"
+	C:\Qt\Tools\mingw1310_64\bin\g++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S C:\Users\Zacky\Desktop\iPop\src\ui\DeleteProgressDialog.cpp -o CMakeFiles\ipop.dir\src\ui\DeleteProgressDialog.cpp.s
+
+CMakeFiles/ipop.dir/src/core/AudioConverter.cpp.obj: CMakeFiles/ipop.dir/flags.make
+CMakeFiles/ipop.dir/src/core/AudioConverter.cpp.obj: CMakeFiles/ipop.dir/includes_CXX.rsp
+CMakeFiles/ipop.dir/src/core/AudioConverter.cpp.obj: C:/Users/Zacky/Desktop/iPop/src/core/AudioConverter.cpp
+CMakeFiles/ipop.dir/src/core/AudioConverter.cpp.obj: CMakeFiles/ipop.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=C:\Users\Zacky\Desktop\iPop\build\Desktop_Qt_6_12_0_MinGW_64_bit_Debug\CMakeFiles --progress-num=$(CMAKE_PROGRESS_12) "Building CXX object CMakeFiles/ipop.dir/src/core/AudioConverter.cpp.obj"
+	C:\Qt\Tools\mingw1310_64\bin\g++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/ipop.dir/src/core/AudioConverter.cpp.obj -MF CMakeFiles\ipop.dir\src\core\AudioConverter.cpp.obj.d -o CMakeFiles\ipop.dir\src\core\AudioConverter.cpp.obj -c C:\Users\Zacky\Desktop\iPop\src\core\AudioConverter.cpp
+
+CMakeFiles/ipop.dir/src/core/AudioConverter.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/ipop.dir/src/core/AudioConverter.cpp.i"
+	C:\Qt\Tools\mingw1310_64\bin\g++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E C:\Users\Zacky\Desktop\iPop\src\core\AudioConverter.cpp > CMakeFiles\ipop.dir\src\core\AudioConverter.cpp.i
+
+CMakeFiles/ipop.dir/src/core/AudioConverter.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/ipop.dir/src/core/AudioConverter.cpp.s"
+	C:\Qt\Tools\mingw1310_64\bin\g++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S C:\Users\Zacky\Desktop\iPop\src\core\AudioConverter.cpp -o CMakeFiles\ipop.dir\src\core\AudioConverter.cpp.s
+
+CMakeFiles/ipop.dir/src/core/TrackImporter.cpp.obj: CMakeFiles/ipop.dir/flags.make
+CMakeFiles/ipop.dir/src/core/TrackImporter.cpp.obj: CMakeFiles/ipop.dir/includes_CXX.rsp
+CMakeFiles/ipop.dir/src/core/TrackImporter.cpp.obj: C:/Users/Zacky/Desktop/iPop/src/core/TrackImporter.cpp
+CMakeFiles/ipop.dir/src/core/TrackImporter.cpp.obj: CMakeFiles/ipop.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=C:\Users\Zacky\Desktop\iPop\build\Desktop_Qt_6_12_0_MinGW_64_bit_Debug\CMakeFiles --progress-num=$(CMAKE_PROGRESS_13) "Building CXX object CMakeFiles/ipop.dir/src/core/TrackImporter.cpp.obj"
+	C:\Qt\Tools\mingw1310_64\bin\g++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/ipop.dir/src/core/TrackImporter.cpp.obj -MF CMakeFiles\ipop.dir\src\core\TrackImporter.cpp.obj.d -o CMakeFiles\ipop.dir\src\core\TrackImporter.cpp.obj -c C:\Users\Zacky\Desktop\iPop\src\core\TrackImporter.cpp
+
+CMakeFiles/ipop.dir/src/core/TrackImporter.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/ipop.dir/src/core/TrackImporter.cpp.i"
+	C:\Qt\Tools\mingw1310_64\bin\g++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E C:\Users\Zacky\Desktop\iPop\src\core\TrackImporter.cpp > CMakeFiles\ipop.dir\src\core\TrackImporter.cpp.i
+
+CMakeFiles/ipop.dir/src/core/TrackImporter.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/ipop.dir/src/core/TrackImporter.cpp.s"
+	C:\Qt\Tools\mingw1310_64\bin\g++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S C:\Users\Zacky\Desktop\iPop\src\core\TrackImporter.cpp -o CMakeFiles\ipop.dir\src\core\TrackImporter.cpp.s
+
+CMakeFiles/ipop.dir/src/ui/ITunesPlayerWidget.cpp.obj: CMakeFiles/ipop.dir/flags.make
+CMakeFiles/ipop.dir/src/ui/ITunesPlayerWidget.cpp.obj: CMakeFiles/ipop.dir/includes_CXX.rsp
+CMakeFiles/ipop.dir/src/ui/ITunesPlayerWidget.cpp.obj: C:/Users/Zacky/Desktop/iPop/src/ui/ITunesPlayerWidget.cpp
+CMakeFiles/ipop.dir/src/ui/ITunesPlayerWidget.cpp.obj: CMakeFiles/ipop.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=C:\Users\Zacky\Desktop\iPop\build\Desktop_Qt_6_12_0_MinGW_64_bit_Debug\CMakeFiles --progress-num=$(CMAKE_PROGRESS_14) "Building CXX object CMakeFiles/ipop.dir/src/ui/ITunesPlayerWidget.cpp.obj"
+	C:\Qt\Tools\mingw1310_64\bin\g++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/ipop.dir/src/ui/ITunesPlayerWidget.cpp.obj -MF CMakeFiles\ipop.dir\src\ui\ITunesPlayerWidget.cpp.obj.d -o CMakeFiles\ipop.dir\src\ui\ITunesPlayerWidget.cpp.obj -c C:\Users\Zacky\Desktop\iPop\src\ui\ITunesPlayerWidget.cpp
+
+CMakeFiles/ipop.dir/src/ui/ITunesPlayerWidget.cpp.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/ipop.dir/src/ui/ITunesPlayerWidget.cpp.i"
+	C:\Qt\Tools\mingw1310_64\bin\g++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E C:\Users\Zacky\Desktop\iPop\src\ui\ITunesPlayerWidget.cpp > CMakeFiles\ipop.dir\src\ui\ITunesPlayerWidget.cpp.i
+
+CMakeFiles/ipop.dir/src/ui/ITunesPlayerWidget.cpp.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/ipop.dir/src/ui/ITunesPlayerWidget.cpp.s"
+	C:\Qt\Tools\mingw1310_64\bin\g++.exe $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S C:\Users\Zacky\Desktop\iPop\src\ui\ITunesPlayerWidget.cpp -o CMakeFiles\ipop.dir\src\ui\ITunesPlayerWidget.cpp.s
+
 # Object files for target ipop
 ipop_OBJECTS = \
 "CMakeFiles/ipop.dir/ipop_autogen/mocs_compilation.cpp.obj" \
@@ -220,7 +280,11 @@ ipop_OBJECTS = \
 "CMakeFiles/ipop.dir/src/core/DeviceDetector.cpp.obj" \
 "CMakeFiles/ipop.dir/src/ui/CapacityBar.cpp.obj" \
 "CMakeFiles/ipop.dir/src/ui/TrackTableModel.cpp.obj" \
-"CMakeFiles/ipop.dir/src/ui/MainWindow.cpp.obj"
+"CMakeFiles/ipop.dir/src/ui/MainWindow.cpp.obj" \
+"CMakeFiles/ipop.dir/src/ui/DeleteProgressDialog.cpp.obj" \
+"CMakeFiles/ipop.dir/src/core/AudioConverter.cpp.obj" \
+"CMakeFiles/ipop.dir/src/core/TrackImporter.cpp.obj" \
+"CMakeFiles/ipop.dir/src/ui/ITunesPlayerWidget.cpp.obj"
 
 # External object files for target ipop
 ipop_EXTERNAL_OBJECTS =
@@ -234,14 +298,20 @@ ipop.exe: CMakeFiles/ipop.dir/src/core/DeviceDetector.cpp.obj
 ipop.exe: CMakeFiles/ipop.dir/src/ui/CapacityBar.cpp.obj
 ipop.exe: CMakeFiles/ipop.dir/src/ui/TrackTableModel.cpp.obj
 ipop.exe: CMakeFiles/ipop.dir/src/ui/MainWindow.cpp.obj
+ipop.exe: CMakeFiles/ipop.dir/src/ui/DeleteProgressDialog.cpp.obj
+ipop.exe: CMakeFiles/ipop.dir/src/core/AudioConverter.cpp.obj
+ipop.exe: CMakeFiles/ipop.dir/src/core/TrackImporter.cpp.obj
+ipop.exe: CMakeFiles/ipop.dir/src/ui/ITunesPlayerWidget.cpp.obj
 ipop.exe: CMakeFiles/ipop.dir/build.make
 ipop.exe: C:/Qt/6.12.0/mingw_64/lib/libQt6Widgets.a
+ipop.exe: C:/Qt/6.12.0/mingw_64/lib/libQt6Multimedia.a
 ipop.exe: C:/Qt/6.12.0/mingw_64/lib/libQt6Gui.a
+ipop.exe: C:/Qt/6.12.0/mingw_64/lib/libQt6Network.a
 ipop.exe: C:/Qt/6.12.0/mingw_64/lib/libQt6Core.a
 ipop.exe: CMakeFiles/ipop.dir/linkLibs.rsp
 ipop.exe: CMakeFiles/ipop.dir/objects1.rsp
 ipop.exe: CMakeFiles/ipop.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=C:\Users\Zacky\Desktop\iPop\build\Desktop_Qt_6_12_0_MinGW_64_bit_Debug\CMakeFiles --progress-num=$(CMAKE_PROGRESS_11) "Linking CXX executable ipop.exe"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=C:\Users\Zacky\Desktop\iPop\build\Desktop_Qt_6_12_0_MinGW_64_bit_Debug\CMakeFiles --progress-num=$(CMAKE_PROGRESS_15) "Linking CXX executable ipop.exe"
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles\ipop.dir\link.txt --verbose=$(VERBOSE)
 
 # Rule to build all files generated by this target.

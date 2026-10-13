@@ -19,6 +19,8 @@
 			"set_target_properties",
 			"include",
 			"find_package",
+			"find_dependency",
+			"_qt_internal_find_qt_dependencies",
 			"target_compile_options",
 			"add_compile_definitions",
 			"project",
@@ -27,11 +29,18 @@
 		"files" : 
 		[
 			"CMakeLists.txt",
-			"C:/Qt/6.12.0/mingw_64/lib/cmake/Qt6Core/Qt6CoreTargets.cmake",
-			"C:/Qt/6.12.0/mingw_64/lib/cmake/Qt6Core/Qt6CoreConfig.cmake",
-			"build/Desktop_Qt_6_12_0_MinGW_64_bit_Debug/.qtcreator/cmake-helper/maintenance_tool_provider.cmake",
 			"C:/Qt/6.12.0/mingw_64/lib/cmake/Qt6Gui/Qt6GuiTargets.cmake",
 			"C:/Qt/6.12.0/mingw_64/lib/cmake/Qt6Gui/Qt6GuiConfig.cmake",
+			"build/Desktop_Qt_6_12_0_MinGW_64_bit_Debug/.qtcreator/cmake-helper/maintenance_tool_provider.cmake",
+			"C:/Qt/6.12.0/mingw_64/lib/cmake/Qt6Multimedia/Qt6MultimediaTargets.cmake",
+			"C:/Qt/6.12.0/mingw_64/lib/cmake/Qt6Multimedia/Qt6MultimediaConfig.cmake",
+			"C:/Qt/6.12.0/mingw_64/lib/cmake/Qt6Network/Qt6NetworkTargets.cmake",
+			"C:/Qt/6.12.0/mingw_64/lib/cmake/Qt6Network/Qt6NetworkConfig.cmake",
+			"C:/Qt/Tools/CMake_64/share/cmake-3.30/Modules/CMakeFindDependencyMacro.cmake",
+			"C:/Qt/6.12.0/mingw_64/lib/cmake/Qt6/QtPublicDependencyHelpers.cmake",
+			"C:/Qt/6.12.0/mingw_64/lib/cmake/Qt6Multimedia/Qt6MultimediaDependencies.cmake",
+			"C:/Qt/6.12.0/mingw_64/lib/cmake/Qt6Core/Qt6CoreTargets.cmake",
+			"C:/Qt/6.12.0/mingw_64/lib/cmake/Qt6Core/Qt6CoreConfig.cmake",
 			"build/Desktop_Qt_6_12_0_MinGW_64_bit_Debug/.qtcreator/cmake-helper/qtcreator-project.cmake"
 		],
 		"nodes" : 
@@ -42,19 +51,19 @@
 			{
 				"command" : 0,
 				"file" : 0,
-				"line" : 40,
+				"line" : 51,
 				"parent" : 0
 			},
 			{
 				"command" : 1,
 				"file" : 0,
-				"line" : 61,
+				"line" : 73,
 				"parent" : 0
 			},
 			{
 				"command" : 2,
 				"file" : 0,
-				"line" : 48,
+				"line" : 59,
 				"parent" : 0
 			},
 			{
@@ -76,7 +85,7 @@
 			{
 				"command" : 4,
 				"file" : 2,
-				"line" : 59,
+				"line" : 55,
 				"parent" : 6
 			},
 			{
@@ -116,31 +125,111 @@
 				"parent" : 13
 			},
 			{
+				"command" : 4,
+				"file" : 5,
+				"line" : 40,
+				"parent" : 11
+			},
+			{
+				"file" : 10,
+				"parent" : 15
+			},
+			{
+				"command" : 7,
+				"file" : 10,
+				"line" : 51,
+				"parent" : 16
+			},
+			{
 				"command" : 6,
-				"file" : 0,
-				"line" : 58,
-				"parent" : 0
+				"file" : 9,
+				"line" : 142,
+				"parent" : 17
+			},
+			{
+				"command" : 5,
+				"file" : 8,
+				"line" : 76,
+				"parent" : 18
+			},
+			{
+				"command" : 5,
+				"file" : 3,
+				"line" : 254,
+				"parent" : 19
+			},
+			{
+				"file" : 7,
+				"parent" : 20
+			},
+			{
+				"command" : 4,
+				"file" : 7,
+				"line" : 55,
+				"parent" : 21
+			},
+			{
+				"file" : 6,
+				"parent" : 22
+			},
+			{
+				"command" : 3,
+				"file" : 6,
+				"line" : 61,
+				"parent" : 23
+			},
+			{
+				"command" : 5,
+				"file" : 3,
+				"line" : 235,
+				"parent" : 4
+			},
+			{
+				"file" : 12,
+				"parent" : 25
+			},
+			{
+				"command" : 4,
+				"file" : 12,
+				"line" : 59,
+				"parent" : 26
+			},
+			{
+				"file" : 11,
+				"parent" : 27
+			},
+			{
+				"command" : 3,
+				"file" : 11,
+				"line" : 61,
+				"parent" : 28
 			},
 			{
 				"command" : 8,
+				"file" : 0,
+				"line" : 70,
+				"parent" : 0
+			},
+			{
+				"command" : 10,
 				"file" : 0,
 				"line" : 3,
 				"parent" : 0
 			},
 			{
-				"file" : 6,
-				"parent" : 16
-			},
-			{
-				"command" : 7,
-				"file" : 6,
-				"line" : 82,
-				"parent" : 17
+				"file" : 13,
+				"parent" : 31
 			},
 			{
 				"command" : 9,
+				"file" : 13,
+				"line" : 82,
+				"parent" : 32
+			},
+			{
+				"command" : 11,
 				"file" : 0,
-				"line" : 42,
+				"line" : 53,
 				"parent" : 0
 			}
 		]
@@ -154,15 +243,15 @@
 					"fragment" : "-g -std=gnu++17 -fdiagnostics-color=always"
 				},
 				{
-					"backtrace" : 15,
+					"backtrace" : 30,
 					"fragment" : "-Wall"
 				},
 				{
-					"backtrace" : 15,
+					"backtrace" : 30,
 					"fragment" : "-Wextra"
 				},
 				{
-					"backtrace" : 15,
+					"backtrace" : 30,
 					"fragment" : "-pedantic"
 				}
 			],
@@ -181,7 +270,15 @@
 					"define" : "QT_GUI_LIB"
 				},
 				{
-					"backtrace" : 18,
+					"backtrace" : 3,
+					"define" : "QT_MULTIMEDIA_LIB"
+				},
+				{
+					"backtrace" : 3,
+					"define" : "QT_NETWORK_LIB"
+				},
+				{
+					"backtrace" : 33,
 					"define" : "QT_QML_DEBUG"
 				},
 				{
@@ -220,15 +317,15 @@
 					"path" : "C:/Users/Zacky/Desktop/iPop/build/Desktop_Qt_6_12_0_MinGW_64_bit_Debug/ipop_autogen/include"
 				},
 				{
-					"backtrace" : 19,
+					"backtrace" : 34,
 					"path" : "C:/Users/Zacky/Desktop/iPop/src"
 				},
 				{
-					"backtrace" : 19,
+					"backtrace" : 34,
 					"path" : "C:/Users/Zacky/Desktop/iPop/src/core"
 				},
 				{
-					"backtrace" : 19,
+					"backtrace" : 34,
 					"path" : "C:/Users/Zacky/Desktop/iPop/src/ui"
 				},
 				{
@@ -255,6 +352,16 @@
 					"backtrace" : 3,
 					"isSystem" : true,
 					"path" : "C:/Qt/6.12.0/mingw_64/include/QtWidgets"
+				},
+				{
+					"backtrace" : 3,
+					"isSystem" : true,
+					"path" : "C:/Qt/6.12.0/mingw_64/include/QtMultimedia"
+				},
+				{
+					"backtrace" : 3,
+					"isSystem" : true,
+					"path" : "C:/Qt/6.12.0/mingw_64/include/QtNetwork"
 				}
 			],
 			"language" : "CXX",
@@ -276,7 +383,12 @@
 				9,
 				11,
 				13,
-				15
+				15,
+				17,
+				19,
+				21,
+				23,
+				25
 			]
 		}
 	],
@@ -324,7 +436,42 @@
 			},
 			{
 				"backtrace" : 3,
+				"fragment" : "C:\\Qt\\6.12.0\\mingw_64\\lib\\libQt6Multimedia.a",
+				"role" : "libraries"
+			},
+			{
+				"backtrace" : 3,
 				"fragment" : "C:\\Qt\\6.12.0\\mingw_64\\lib\\libQt6Gui.a",
+				"role" : "libraries"
+			},
+			{
+				"backtrace" : 9,
+				"fragment" : "-ld3d11",
+				"role" : "libraries"
+			},
+			{
+				"backtrace" : 9,
+				"fragment" : "-ldxgi",
+				"role" : "libraries"
+			},
+			{
+				"backtrace" : 9,
+				"fragment" : "-ldxguid",
+				"role" : "libraries"
+			},
+			{
+				"backtrace" : 9,
+				"fragment" : "-ld3d12",
+				"role" : "libraries"
+			},
+			{
+				"backtrace" : 14,
+				"fragment" : "C:\\Qt\\6.12.0\\mingw_64\\lib\\libQt6Network.a",
+				"role" : "libraries"
+			},
+			{
+				"backtrace" : 24,
+				"fragment" : "-lws2_32",
 				"role" : "libraries"
 			},
 			{
@@ -333,33 +480,13 @@
 				"role" : "libraries"
 			},
 			{
-				"backtrace" : 9,
+				"backtrace" : 29,
 				"fragment" : "-lmpr",
 				"role" : "libraries"
 			},
 			{
-				"backtrace" : 9,
+				"backtrace" : 29,
 				"fragment" : "-luserenv",
-				"role" : "libraries"
-			},
-			{
-				"backtrace" : 14,
-				"fragment" : "-ld3d11",
-				"role" : "libraries"
-			},
-			{
-				"backtrace" : 14,
-				"fragment" : "-ldxgi",
-				"role" : "libraries"
-			},
-			{
-				"backtrace" : 14,
-				"fragment" : "-ldxguid",
-				"role" : "libraries"
-			},
-			{
-				"backtrace" : 14,
-				"fragment" : "-ld3d12",
 				"role" : "libraries"
 			},
 			{
@@ -389,7 +516,12 @@
 				9,
 				11,
 				13,
-				15
+				15,
+				17,
+				19,
+				21,
+				23,
+				25
 			]
 		},
 		{
@@ -403,21 +535,26 @@
 				8,
 				10,
 				12,
-				14
+				14,
+				16,
+				18,
+				20,
+				22,
+				24
 			]
 		},
 		{
 			"name" : "",
 			"sourceIndexes" : 
 			[
-				16
+				26
 			]
 		},
 		{
 			"name" : "CMake Rules",
 			"sourceIndexes" : 
 			[
-				17
+				27
 			]
 		}
 	],
@@ -455,6 +592,17 @@
 			"backtrace" : 1,
 			"compileGroupIndex" : 0,
 			"path" : "src/core/ITunesDBReader.cpp",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 1,
+			"path" : "src/core/ITunesHash58.h",
+			"sourceGroupIndex" : 1
+		},
+		{
+			"backtrace" : 1,
+			"compileGroupIndex" : 0,
+			"path" : "src/core/ITunesHash58.cpp",
 			"sourceGroupIndex" : 0
 		},
 		{
@@ -510,6 +658,50 @@
 			"backtrace" : 1,
 			"compileGroupIndex" : 0,
 			"path" : "src/ui/MainWindow.cpp",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 1,
+			"path" : "src/ui/DeleteProgressDialog.h",
+			"sourceGroupIndex" : 1
+		},
+		{
+			"backtrace" : 1,
+			"compileGroupIndex" : 0,
+			"path" : "src/ui/DeleteProgressDialog.cpp",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 1,
+			"path" : "src/core/AudioConverter.h",
+			"sourceGroupIndex" : 1
+		},
+		{
+			"backtrace" : 1,
+			"compileGroupIndex" : 0,
+			"path" : "src/core/AudioConverter.cpp",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 1,
+			"path" : "src/core/TrackImporter.h",
+			"sourceGroupIndex" : 1
+		},
+		{
+			"backtrace" : 1,
+			"compileGroupIndex" : 0,
+			"path" : "src/core/TrackImporter.cpp",
+			"sourceGroupIndex" : 0
+		},
+		{
+			"backtrace" : 1,
+			"path" : "src/ui/ITunesPlayerWidget.h",
+			"sourceGroupIndex" : 1
+		},
+		{
+			"backtrace" : 1,
+			"compileGroupIndex" : 0,
+			"path" : "src/ui/ITunesPlayerWidget.cpp",
 			"sourceGroupIndex" : 0
 		},
 		{

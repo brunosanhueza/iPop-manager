@@ -10,6 +10,16 @@
 #include <QSet>
 #include <QDebug>
 
+#include <QProcess>
+
+#if defined(Q_OS_WIN)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <winioctl.h>
+#endif
+
 #if defined(Q_OS_LINUX)
 #include <sys/statvfs.h>
 #endif
@@ -104,26 +114,76 @@ void IPodDevice::loadPlaylists() {
     reader.read(m_playlists);
 }
 
-bool IPodDevice::deleteTracks(const QList<uint32_t>& trackIds, int playlistIndex) {
+uint64_t IPodDevice::calculateTracksSizeBytes(const QList<uint32_t>& trackIds) const {
+    QSet<uint32_t> toDelete(trackIds.begin(), trackIds.end());
+    QMap<uint32_t, uint64_t> uniqueSizes;
+    for (const auto& pl : m_playlists) {
+        for (const auto& t : pl.tracks) {
+            if (toDelete.contains(t.id)) {
+                uniqueSizes.insert(t.id, t.sizeBytes);
+            }
+        }
+    }
+    uint64_t total = 0;
+    for (uint64_t sz : uniqueSizes) {
+        total += sz;
+    }
+    return total;
+}
+
+bool IPodDevice::deleteTracks(const QList<uint32_t>& trackIds, int playlistIndex, DeleteProgressCallback progressCb) {
     if (playlistIndex < 0 || playlistIndex >= m_playlists.size() || trackIds.isEmpty()) {
         return false;
     }
 
     QSet<uint32_t> toDelete(trackIds.begin(), trackIds.end());
 
-    // 1. Borrar archivos físicos del almacenamiento masivo del iPod
+    // Identificar pistas únicas a eliminar
+    QMap<uint32_t, Track> uniqueTracksToDelete;
     for (const auto& pl : m_playlists) {
         for (const auto& t : pl.tracks) {
-            if (toDelete.contains(t.id) && !t.filePath.isEmpty()) {
-                QString realPath = ITunesDBReader::resolvePhysicalPath(m_mountPath, t.filePath);
-                if (QFile::exists(realPath)) {
-                    QFile::remove(realPath);
-                }
+            if (toDelete.contains(t.id)) {
+                uniqueTracksToDelete.insert(t.id, t);
             }
         }
     }
 
+    uint64_t totalBytes = 0;
+    for (const auto& t : uniqueTracksToDelete) {
+        totalBytes += t.sizeBytes;
+    }
+
+    if (progressCb) {
+        progressCb(0, totalBytes, QString("Iniciando eliminación de %1 pistas...").arg(uniqueTracksToDelete.size()));
+    }
+
+    // 1. Borrar archivos físicos del almacenamiento masivo del iPod
+    uint64_t currentBytes = 0;
+    int trackCounter = 0;
+    for (const auto& t : uniqueTracksToDelete) {
+        trackCounter++;
+        if (progressCb) {
+            progressCb(currentBytes, totalBytes, QString("Borrando (%1/%2): %3").arg(trackCounter).arg(uniqueTracksToDelete.size()).arg(t.title));
+        }
+
+        if (!t.filePath.isEmpty()) {
+            QString realPath = ITunesDBReader::resolvePhysicalPath(m_mountPath, t.filePath);
+            if (QFile::exists(realPath)) {
+                QFile::remove(realPath);
+            }
+        }
+
+        currentBytes += t.sizeBytes;
+        if (progressCb) {
+            progressCb(currentBytes, totalBytes, QString("Borrado: %1").arg(t.title));
+        }
+    }
+
     // 2. Modificar y guardar la base de datos binaria iTunesDB en el iPod
+    if (progressCb) {
+        progressCb(currentBytes, totalBytes, "Actualizando base de datos iTunesDB...");
+    }
+
     QDir dir(m_mountPath);
     QString dbPath = dir.filePath("iPod_Control/iTunes/iTunesDB");
     if (!QFile::exists(dbPath)) {
@@ -134,12 +194,67 @@ bool IPodDevice::deleteTracks(const QList<uint32_t>& trackIds, int playlistIndex
         ITunesDBReader::removeTracksFromDatabase(dbPath, toDelete, m_serialNumber);
     }
 
+    // 3. Vaciado físico de buffers del volumen
+    if (progressCb) {
+        progressCb(currentBytes, totalBytes, "Vaciando búferes a la memoria flash del iPod...");
+    }
     ITunesDBReader::flushVolumeBuffers(m_mountPath);
 
-    // 3. Recargar playlists limpias y recalcular almacenamiento
+    // 4. Recargar playlists limpias y recalcular almacenamiento
     loadPlaylists();
     refreshStorageBreakdown();
+
+    if (progressCb) {
+        progressCb(totalBytes, totalBytes, "¡Operación completada con éxito!");
+    }
+
     return true;
+}
+
+bool IPodDevice::deletePlaylists(const QList<int>& playlistIndices, QString* errorMsg) {
+    if (!m_isValid || playlistIndices.isEmpty()) return false;
+    QDir dir(m_mountPath);
+    QString dbPath = dir.filePath("iPod_Control/iTunes/iTunesDB");
+    if (!QFile::exists(dbPath)) dbPath = dir.filePath("ipod_control/itunes/itunesdb");
+
+    QSet<int> toDelete(playlistIndices.begin(), playlistIndices.end());
+    bool ok = ITunesDBReader::deletePlaylistsFromDatabase(dbPath, toDelete, m_serialNumber);
+    if (ok) {
+        loadPlaylists();
+    } else if (errorMsg) {
+        *errorMsg = "No se pudieron eliminar las listas de reproducción de la base de datos.";
+    }
+    return ok;
+}
+
+bool IPodDevice::renamePlaylist(int playlistIndex, const QString& newName, QString* errorMsg) {
+    if (!m_isValid || playlistIndex <= 0) return false;
+    QDir dir(m_mountPath);
+    QString dbPath = dir.filePath("iPod_Control/iTunes/iTunesDB");
+    if (!QFile::exists(dbPath)) dbPath = dir.filePath("ipod_control/itunes/itunesdb");
+
+    bool ok = ITunesDBReader::renamePlaylistInDatabase(dbPath, playlistIndex, newName, m_serialNumber);
+    if (ok) {
+        loadPlaylists();
+    } else if (errorMsg) {
+        *errorMsg = "No se pudo renombrar la lista en la base de datos.";
+    }
+    return ok;
+}
+
+bool IPodDevice::createPlaylist(const QString& name, QString* errorMsg) {
+    if (!m_isValid || name.trimmed().isEmpty()) return false;
+    QDir dir(m_mountPath);
+    QString dbPath = dir.filePath("iPod_Control/iTunes/iTunesDB");
+    if (!QFile::exists(dbPath)) dbPath = dir.filePath("ipod_control/itunes/itunesdb");
+
+    bool ok = ITunesDBReader::createPlaylistInDatabase(dbPath, name, m_serialNumber);
+    if (ok) {
+        loadPlaylists();
+    } else if (errorMsg) {
+        *errorMsg = "No se pudo crear la nueva lista en la base de datos.";
+    }
+    return ok;
 }
 
 void IPodDevice::refreshStorageBreakdown() {
@@ -201,4 +316,98 @@ QString IPodDevice::formatBytes(uint64_t bytes) {
     } else {
         return QString::number(bytes) + " B";
     }
+}
+
+bool IPodDevice::eject(QString* errorMsg) {
+    if (m_mountPath.isEmpty()) {
+        if (errorMsg) *errorMsg = "Ruta de montaje no especificada.";
+        return false;
+    }
+
+#if defined(Q_OS_WIN)
+    QString cleanPath = m_mountPath.trimmed();
+    QChar driveLetter = cleanPath[0].toUpper();
+    QString devicePath = QString("\\\\.\\%1:").arg(driveLetter);
+    std::wstring wPath = devicePath.toStdWString();
+
+    HANDLE hVolume = CreateFileW(
+        wPath.c_str(),
+        GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        NULL,
+        OPEN_EXISTING,
+        0,
+        NULL
+    );
+
+    if (hVolume == INVALID_HANDLE_VALUE) {
+        hVolume = CreateFileW(
+            wPath.c_str(),
+            GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            NULL,
+            OPEN_EXISTING,
+            0,
+            NULL
+        );
+    }
+
+    if (hVolume == INVALID_HANDLE_VALUE) {
+        DWORD err = GetLastError();
+        if (errorMsg) {
+            *errorMsg = QString("No se pudo abrir el volumen de la unidad %1: (Código de error %2). Asegúrate de que no haya archivos abiertos.").arg(driveLetter).arg(err);
+        }
+        return false;
+    }
+
+    // Asegurar que todos los datos en caché de Windows se escriban físicamente en el iPod
+    FlushFileBuffers(hVolume);
+
+    DWORD bytesReturned = 0;
+    // Reintentar bloquear el volumen (FSCTL_LOCK_VOLUME) hasta 5 veces por si el Explorador de Windows o el indexador lo están tocando
+    for (int retry = 0; retry < 5; ++retry) {
+        if (DeviceIoControl(hVolume, FSCTL_LOCK_VOLUME, NULL, 0, NULL, 0, &bytesReturned, NULL)) {
+            break;
+        }
+        Sleep(200);
+    }
+
+    // Desmontar el volumen del sistema de archivos
+    DeviceIoControl(hVolume, FSCTL_DISMOUNT_VOLUME, NULL, 0, NULL, 0, &bytesReturned, NULL);
+
+    // Habilitar extracción de medios (PreventMediaRemoval = FALSE)
+    PREVENT_MEDIA_REMOVAL pmr;
+    pmr.PreventMediaRemoval = FALSE;
+    DeviceIoControl(hVolume, IOCTL_STORAGE_MEDIA_REMOVAL, &pmr, sizeof(pmr), NULL, 0, &bytesReturned, NULL);
+
+    // Enviar el comando SCSI de expulsión de hardware (START STOP UNIT con LoEj=1)
+    // Este comando hace que el iPod cambie de "No desconectar" a "Aceptable desconectar"
+    BOOL ejected = DeviceIoControl(hVolume, IOCTL_STORAGE_EJECT_MEDIA, NULL, 0, NULL, 0, &bytesReturned, NULL);
+    Q_UNUSED(ejected);
+
+    CloseHandle(hVolume);
+
+    // Refuerzo adicional notificando al Shell de Windows (Explorer)
+    QString psCommand = QString(
+        "$sh = New-Object -ComObject Shell.Application; "
+        "$item = $sh.Namespace(17).ParseName('%1:'); "
+        "if ($item) { foreach ($v in $item.Verbs()) { if ($v.Name.Replace('&','') -match '(?i)expulsar|eject') { $v.DoIt(); break } } }"
+    ).arg(driveLetter);
+    QProcess::execute("powershell", {"-NoProfile", "-NonInteractive", "-Command", psCommand});
+
+    m_isValid = false;
+    return true;
+#else
+    QProcess::execute("sync");
+    int exitCode = QProcess::execute("eject", {m_mountPath});
+    if (exitCode != 0) {
+        exitCode = QProcess::execute("umount", {m_mountPath});
+    }
+    if (exitCode == 0) {
+        m_isValid = false;
+        return true;
+    }
+    if (errorMsg) *errorMsg = "No se pudo desmontar el iPod automáticamente.";
+    return false;
+#endif
 }

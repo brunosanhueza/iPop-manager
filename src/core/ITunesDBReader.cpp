@@ -42,6 +42,27 @@ namespace {
         int charCount = static_cast<int>(strLenBytes / 2);
         return QString::fromUtf16(u16ptr, charCount).trimmed();
     }
+
+    QByteArray makeMhodString(uint32_t type, const QString& text) {
+        int charCount = text.length();
+        int byteCount = charCount * 2;
+        const ushort* utf16 = text.utf16();
+
+        QByteArray mhod(40, '\0');
+        std::memcpy(mhod.data(), "mhod", 4);
+        writeLE32(mhod.data() + 4, 24);
+        writeLE32(mhod.data() + 8, static_cast<uint32_t>(40 + byteCount));
+        writeLE32(mhod.data() + 12, type);
+        writeLE32(mhod.data() + 16, 1);
+        writeLE32(mhod.data() + 20, 0);
+        writeLE32(mhod.data() + 24, 0);
+        writeLE32(mhod.data() + 28, static_cast<uint32_t>(byteCount));
+        writeLE32(mhod.data() + 32, 0);
+        writeLE32(mhod.data() + 36, 0);
+
+        mhod.append(reinterpret_cast<const char*>(utf16), byteCount);
+        return mhod;
+    }
 }
 
 ITunesDBReader::ITunesDBReader(const QString& ipodMountPath)
@@ -251,6 +272,339 @@ bool ITunesDBReader::removeTracksFromDatabase(const QString& dbPath, const QSet<
     bool ok = QFile::rename(tmpPath, dbPath);
 
     // Forzar vaciado de buffers del volumen hacia el almacenamiento físico del iPod
+    QFileInfo fi(dbPath);
+    QDir mountDir = fi.dir();
+    mountDir.cdUp();
+    mountDir.cdUp();
+    flushVolumeBuffers(mountDir.absolutePath());
+
+    return ok;
+}
+
+bool ITunesDBReader::deletePlaylistsFromDatabase(const QString& dbPath, const QSet<int>& playlistIndices, const QString& firewireGuid) {
+    if (playlistIndices.isEmpty()) return true;
+
+    QFile file(dbPath);
+    if (!file.open(QIODevice::ReadOnly)) return false;
+    QByteArray data = file.readAll();
+    file.close();
+
+    if (data.size() < 100 || std::memcmp(data.constData(), "mhbd", 4) != 0) return false;
+
+    QString bakPath = dbPath + ".bak";
+    if (!QFile::exists(bakPath)) {
+        QFile::copy(dbPath, bakPath);
+    }
+
+    uint32_t mhbdHdrLen = readLE32(data.constData() + 4);
+    QByteArray newFile = data.left(static_cast<int>(mhbdHdrLen));
+
+    int offset = static_cast<int>(mhbdHdrLen);
+    const int totalSize = data.size();
+
+    while (offset + 16 <= totalSize) {
+        const char* tag = data.constData() + offset;
+        if (std::memcmp(tag, "mhsd", 4) != 0) break;
+
+        uint32_t hdrLen = readLE32(tag + 4);
+        uint32_t totLen = readLE32(tag + 8);
+        uint32_t dsType = readLE32(tag + 12);
+        int childOffset = offset + static_cast<int>(hdrLen);
+
+        if (dsType == 2 && childOffset + 12 <= totalSize) {
+            const char* mhlpTag = data.constData() + childOffset;
+            if (std::memcmp(mhlpTag, "mhlp", 4) == 0) {
+                uint32_t mhlpHdrLen = readLE32(mhlpTag + 4);
+                uint32_t numPlaylists = readLE32(mhlpTag + 8);
+
+                QByteArray mhsdHdr = data.mid(offset, static_cast<int>(hdrLen));
+                QByteArray mhlpHdr = data.mid(childOffset, static_cast<int>(mhlpHdrLen));
+                QByteArray remainingHyps;
+
+                int plOffset = childOffset + static_cast<int>(mhlpHdrLen);
+                uint32_t keptCount = 0;
+
+                for (uint32_t p = 0; p < numPlaylists && plOffset + 24 <= totalSize; ++p) {
+                    const char* mhypTag = data.constData() + plOffset;
+                    if (std::memcmp(mhypTag, "mhyp", 4) != 0) break;
+                    uint32_t plTotLen = readLE32(mhypTag + 8);
+
+                    if (p != 0 && playlistIndices.contains(static_cast<int>(p))) {
+                        // Omitir esta playlist seleccionada
+                    } else {
+                        remainingHyps.append(data.mid(plOffset, static_cast<int>(plTotLen)));
+                        keptCount++;
+                    }
+
+                    if (plTotLen == 0) break;
+                    plOffset += static_cast<int>(plTotLen);
+                }
+
+                writeLE32(mhlpHdr.data() + 8, keptCount);
+
+                QByteArray dsPayload = mhlpHdr + remainingHyps;
+                uint32_t newDsTotLen = static_cast<uint32_t>(mhsdHdr.size() + dsPayload.size());
+                writeLE32(mhsdHdr.data() + 8, newDsTotLen);
+
+                newFile.append(mhsdHdr + dsPayload);
+            } else {
+                newFile.append(data.mid(offset, static_cast<int>(totLen)));
+            }
+        } else {
+            newFile.append(data.mid(offset, static_cast<int>(totLen)));
+        }
+
+        if (totLen == 0) break;
+        offset += static_cast<int>(totLen);
+    }
+
+    writeLE32(newFile.data() + 8, static_cast<uint32_t>(newFile.size()));
+
+    if (!firewireGuid.isEmpty()) {
+        ITunesHash58::updateHash(newFile, firewireGuid);
+    }
+
+    QString tmpPath = dbPath + ".tmp";
+    QFile tmpFile(tmpPath);
+    if (!tmpFile.open(QIODevice::WriteOnly)) return false;
+    tmpFile.write(newFile);
+    tmpFile.flush();
+    tmpFile.close();
+
+    QFile::remove(dbPath);
+    bool ok = QFile::rename(tmpPath, dbPath);
+
+    QFileInfo fi(dbPath);
+    QDir mountDir = fi.dir();
+    mountDir.cdUp();
+    mountDir.cdUp();
+    flushVolumeBuffers(mountDir.absolutePath());
+
+    return ok;
+}
+
+bool ITunesDBReader::renamePlaylistInDatabase(const QString& dbPath, int playlistIndex, const QString& newName, const QString& firewireGuid) {
+    if (playlistIndex <= 0 || newName.trimmed().isEmpty()) return false;
+
+    QFile file(dbPath);
+    if (!file.open(QIODevice::ReadOnly)) return false;
+    QByteArray data = file.readAll();
+    file.close();
+
+    if (data.size() < 100 || std::memcmp(data.constData(), "mhbd", 4) != 0) return false;
+
+    QString bakPath = dbPath + ".bak";
+    if (!QFile::exists(bakPath)) {
+        QFile::copy(dbPath, bakPath);
+    }
+
+    uint32_t mhbdHdrLen = readLE32(data.constData() + 4);
+    QByteArray newFile = data.left(static_cast<int>(mhbdHdrLen));
+
+    int offset = static_cast<int>(mhbdHdrLen);
+    const int totalSize = data.size();
+
+    while (offset + 16 <= totalSize) {
+        const char* tag = data.constData() + offset;
+        if (std::memcmp(tag, "mhsd", 4) != 0) break;
+
+        uint32_t hdrLen = readLE32(tag + 4);
+        uint32_t totLen = readLE32(tag + 8);
+        uint32_t dsType = readLE32(tag + 12);
+        int childOffset = offset + static_cast<int>(hdrLen);
+
+        if (dsType == 2 && childOffset + 12 <= totalSize) {
+            const char* mhlpTag = data.constData() + childOffset;
+            if (std::memcmp(mhlpTag, "mhlp", 4) == 0) {
+                uint32_t mhlpHdrLen = readLE32(mhlpTag + 4);
+                uint32_t numPlaylists = readLE32(mhlpTag + 8);
+
+                QByteArray mhsdHdr = data.mid(offset, static_cast<int>(hdrLen));
+                QByteArray mhlpHdr = data.mid(childOffset, static_cast<int>(mhlpHdrLen));
+                QByteArray remainingHyps;
+
+                int plOffset = childOffset + static_cast<int>(mhlpHdrLen);
+
+                for (uint32_t p = 0; p < numPlaylists && plOffset + 24 <= totalSize; ++p) {
+                    const char* mhypTag = data.constData() + plOffset;
+                    if (std::memcmp(mhypTag, "mhyp", 4) != 0) break;
+
+                    uint32_t plHdrLen = readLE32(mhypTag + 4);
+                    uint32_t plTotLen = readLE32(mhypTag + 8);
+                    uint32_t numMhods = readLE32(mhypTag + 12);
+
+                    if (static_cast<int>(p) == playlistIndex) {
+                        QByteArray mhypHdr = data.mid(plOffset, static_cast<int>(plHdrLen));
+                        int mhodOffset = plOffset + static_cast<int>(plHdrLen);
+                        QByteArray newMhods;
+
+                        bool titleReplaced = false;
+                        for (uint32_t m = 0; m < numMhods && mhodOffset + 12 <= totalSize; ++m) {
+                            const char* mhodTag = data.constData() + mhodOffset;
+                            if (std::memcmp(mhodTag, "mhod", 4) != 0) break;
+                            uint32_t mhodTotLen = readLE32(mhodTag + 8);
+                            uint32_t mhodType = readLE32(mhodTag + 12);
+
+                            if (mhodType == 1) {
+                                newMhods.append(makeMhodString(1, newName.trimmed()));
+                                titleReplaced = true;
+                            } else {
+                                newMhods.append(data.mid(mhodOffset, static_cast<int>(mhodTotLen)));
+                            }
+
+                            if (mhodTotLen == 0) break;
+                            mhodOffset += static_cast<int>(mhodTotLen);
+                        }
+
+                        if (!titleReplaced) {
+                            newMhods.prepend(makeMhodString(1, newName.trimmed()));
+                            writeLE32(mhypHdr.data() + 12, numMhods + 1);
+                        }
+
+                        int hipsLen = static_cast<int>(plTotLen) - (mhodOffset - plOffset);
+                        QByteArray hipsData = (hipsLen > 0) ? data.mid(mhodOffset, hipsLen) : QByteArray();
+
+                        uint32_t newPlTotLen = static_cast<uint32_t>(mhypHdr.size() + newMhods.size() + hipsData.size());
+                        writeLE32(mhypHdr.data() + 8, newPlTotLen);
+
+                        remainingHyps.append(mhypHdr + newMhods + hipsData);
+                    } else {
+                        remainingHyps.append(data.mid(plOffset, static_cast<int>(plTotLen)));
+                    }
+
+                    if (plTotLen == 0) break;
+                    plOffset += static_cast<int>(plTotLen);
+                }
+
+                QByteArray dsPayload = mhlpHdr + remainingHyps;
+                uint32_t newDsTotLen = static_cast<uint32_t>(mhsdHdr.size() + dsPayload.size());
+                writeLE32(mhsdHdr.data() + 8, newDsTotLen);
+
+                newFile.append(mhsdHdr + dsPayload);
+            } else {
+                newFile.append(data.mid(offset, static_cast<int>(totLen)));
+            }
+        } else {
+            newFile.append(data.mid(offset, static_cast<int>(totLen)));
+        }
+
+        if (totLen == 0) break;
+        offset += static_cast<int>(totLen);
+    }
+
+    writeLE32(newFile.data() + 8, static_cast<uint32_t>(newFile.size()));
+
+    if (!firewireGuid.isEmpty()) {
+        ITunesHash58::updateHash(newFile, firewireGuid);
+    }
+
+    QString tmpPath = dbPath + ".tmp";
+    QFile tmpFile(tmpPath);
+    if (!tmpFile.open(QIODevice::WriteOnly)) return false;
+    tmpFile.write(newFile);
+    tmpFile.flush();
+    tmpFile.close();
+
+    QFile::remove(dbPath);
+    bool ok = QFile::rename(tmpPath, dbPath);
+
+    QFileInfo fi(dbPath);
+    QDir mountDir = fi.dir();
+    mountDir.cdUp();
+    mountDir.cdUp();
+    flushVolumeBuffers(mountDir.absolutePath());
+
+    return ok;
+}
+
+bool ITunesDBReader::createPlaylistInDatabase(const QString& dbPath, const QString& name, const QString& firewireGuid) {
+    if (name.trimmed().isEmpty()) return false;
+
+    QFile file(dbPath);
+    if (!file.open(QIODevice::ReadOnly)) return false;
+    QByteArray data = file.readAll();
+    file.close();
+
+    if (data.size() < 100 || std::memcmp(data.constData(), "mhbd", 4) != 0) return false;
+
+    QString bakPath = dbPath + ".bak";
+    if (!QFile::exists(bakPath)) {
+        QFile::copy(dbPath, bakPath);
+    }
+
+    uint32_t mhbdHdrLen = readLE32(data.constData() + 4);
+    QByteArray newFile = data.left(static_cast<int>(mhbdHdrLen));
+
+    int offset = static_cast<int>(mhbdHdrLen);
+    const int totalSize = data.size();
+
+    QByteArray titleMhod = makeMhodString(1, name.trimmed());
+    uint32_t plHdrLen = 24;
+    uint32_t plTotLen = plHdrLen + static_cast<uint32_t>(titleMhod.size());
+
+    QByteArray newMhyp(static_cast<int>(plHdrLen), '\0');
+    std::memcpy(newMhyp.data(), "mhyp", 4);
+    writeLE32(newMhyp.data() + 4, plHdrLen);
+    writeLE32(newMhyp.data() + 8, plTotLen);
+    writeLE32(newMhyp.data() + 12, 1);
+    writeLE32(newMhyp.data() + 16, 0);
+    newMhyp.append(titleMhod);
+
+    while (offset + 16 <= totalSize) {
+        const char* tag = data.constData() + offset;
+        if (std::memcmp(tag, "mhsd", 4) != 0) break;
+
+        uint32_t hdrLen = readLE32(tag + 4);
+        uint32_t totLen = readLE32(tag + 8);
+        uint32_t dsType = readLE32(tag + 12);
+        int childOffset = offset + static_cast<int>(hdrLen);
+
+        if (dsType == 2 && childOffset + 12 <= totalSize) {
+            const char* mhlpTag = data.constData() + childOffset;
+            if (std::memcmp(mhlpTag, "mhlp", 4) == 0) {
+                uint32_t mhlpHdrLen = readLE32(mhlpTag + 4);
+                uint32_t numPlaylists = readLE32(mhlpTag + 8);
+
+                QByteArray mhsdHdr = data.mid(offset, static_cast<int>(hdrLen));
+                QByteArray mhlpHdr = data.mid(childOffset, static_cast<int>(mhlpHdrLen));
+                writeLE32(mhlpHdr.data() + 8, numPlaylists + 1);
+
+                int playlistsLen = static_cast<int>(totLen) - static_cast<int>(hdrLen) - static_cast<int>(mhlpHdrLen);
+                QByteArray playlistsData = data.mid(childOffset + static_cast<int>(mhlpHdrLen), playlistsLen);
+                playlistsData.append(newMhyp);
+
+                QByteArray dsPayload = mhlpHdr + playlistsData;
+                uint32_t newDsTotLen = static_cast<uint32_t>(mhsdHdr.size() + dsPayload.size());
+                writeLE32(mhsdHdr.data() + 8, newDsTotLen);
+
+                newFile.append(mhsdHdr + dsPayload);
+            } else {
+                newFile.append(data.mid(offset, static_cast<int>(totLen)));
+            }
+        } else {
+            newFile.append(data.mid(offset, static_cast<int>(totLen)));
+        }
+
+        if (totLen == 0) break;
+        offset += static_cast<int>(totLen);
+    }
+
+    writeLE32(newFile.data() + 8, static_cast<uint32_t>(newFile.size()));
+
+    if (!firewireGuid.isEmpty()) {
+        ITunesHash58::updateHash(newFile, firewireGuid);
+    }
+
+    QString tmpPath = dbPath + ".tmp";
+    QFile tmpFile(tmpPath);
+    if (!tmpFile.open(QIODevice::WriteOnly)) return false;
+    tmpFile.write(newFile);
+    tmpFile.flush();
+    tmpFile.close();
+
+    QFile::remove(dbPath);
+    bool ok = QFile::rename(tmpPath, dbPath);
+
     QFileInfo fi(dbPath);
     QDir mountDir = fi.dir();
     mountDir.cdUp();

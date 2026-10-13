@@ -460,4 +460,21 @@ CMakeFiles/ipop.dir/src/main.cpp.obj: \
  C:\Users\Zacky\Desktop\iPop\src\ui/CapacityBar.h \
  C:/Qt/6.12.0/mingw_64/include/QtWidgets/QWidget \
  C:\Users\Zacky\Desktop\iPop\src\ui/TrackTableModel.h \
- C:/Qt/6.12.0/mingw_64/include/QtCore/QAbstractTableModel
+ C:/Qt/6.12.0/mingw_64/include/QtCore/QAbstractTableModel \
+ C:\Users\Zacky\Desktop\iPop\src\ui/ITunesPlayerWidget.h \
+ C:/Qt/6.12.0/mingw_64/include/QtWidgets/QSlider \
+ C:/Qt/6.12.0/mingw_64/include/QtWidgets/QHBoxLayout \
+ C:/Qt/6.12.0/mingw_64/include/QtWidgets/qboxlayout.h \
+ C:/Qt/6.12.0/mingw_64/include/QtWidgets/qlayout.h \
+ C:/Qt/6.12.0/mingw_64/include/QtWidgets/qlayoutitem.h \
+ C:/Qt/6.12.0/mingw_64/include/QtWidgets/qgridlayout.h \
+ C:/Qt/6.12.0/mingw_64/include/QtWidgets/QVBoxLayout \
+ C:/Qt/6.12.0/mingw_64/include/QtMultimedia/QMediaPlayer \
+ C:/Qt/6.12.0/mingw_64/include/QtMultimedia/qmediaplayer.h \
+ C:/Qt/6.12.0/mingw_64/include/QtMultimedia/qtmultimediaglobal.h \
+ C:/Qt/6.12.0/mingw_64/include/QtMultimedia/qtmultimedia-config.h \
+ C:/Qt/6.12.0/mingw_64/include/QtMultimedia/qtmultimediaexports.h \
+ C:/Qt/6.12.0/mingw_64/include/QtMultimedia/qtaudio.h \
+ C:/Qt/6.12.0/mingw_64/include/QtMultimedia/qaudio.h \
+ C:/Qt/6.12.0/mingw_64/include/QtMultimedia/QAudioOutput \
+ C:/Qt/6.12.0/mingw_64/include/QtMultimedia/qaudiooutput.h

@@ -177,15 +177,27 @@ C:/Users/Zacky/Desktop/iPop/build/Desktop_Qt_6_12_0_MinGW_64_bit_Debug/ipop_auto
   C:/Qt/6.12.0/mingw_64/include/QtGui/qvalidator.h \
   C:/Qt/6.12.0/mingw_64/include/QtGui/qwindowdefs.h \
   C:/Qt/6.12.0/mingw_64/include/QtGui/qwindowdefs_win.h \
+  C:/Qt/6.12.0/mingw_64/include/QtMultimedia/QAudioOutput \
+  C:/Qt/6.12.0/mingw_64/include/QtMultimedia/QMediaPlayer \
+  C:/Qt/6.12.0/mingw_64/include/QtMultimedia/qaudio.h \
+  C:/Qt/6.12.0/mingw_64/include/QtMultimedia/qaudiooutput.h \
+  C:/Qt/6.12.0/mingw_64/include/QtMultimedia/qmediaplayer.h \
+  C:/Qt/6.12.0/mingw_64/include/QtMultimedia/qtaudio.h \
+  C:/Qt/6.12.0/mingw_64/include/QtMultimedia/qtmultimedia-config.h \
+  C:/Qt/6.12.0/mingw_64/include/QtMultimedia/qtmultimediaexports.h \
+  C:/Qt/6.12.0/mingw_64/include/QtMultimedia/qtmultimediaglobal.h \
   C:/Qt/6.12.0/mingw_64/include/QtWidgets/QComboBox \
+  C:/Qt/6.12.0/mingw_64/include/QtWidgets/QHBoxLayout \
   C:/Qt/6.12.0/mingw_64/include/QtWidgets/QLabel \
   C:/Qt/6.12.0/mingw_64/include/QtWidgets/QLineEdit \
   C:/Qt/6.12.0/mingw_64/include/QtWidgets/QMainWindow \
   C:/Qt/6.12.0/mingw_64/include/QtWidgets/QPushButton \
+  C:/Qt/6.12.0/mingw_64/include/QtWidgets/QSlider \
   C:/Qt/6.12.0/mingw_64/include/QtWidgets/QSplitter \
   C:/Qt/6.12.0/mingw_64/include/QtWidgets/QTableView \
   C:/Qt/6.12.0/mingw_64/include/QtWidgets/QTreeWidget \
   C:/Qt/6.12.0/mingw_64/include/QtWidgets/QTreeWidgetItem \
+  C:/Qt/6.12.0/mingw_64/include/QtWidgets/QVBoxLayout \
   C:/Qt/6.12.0/mingw_64/include/QtWidgets/QWidget \
   C:/Qt/6.12.0/mingw_64/include/QtWidgets/qabstractbutton.h \
   C:/Qt/6.12.0/mingw_64/include/QtWidgets/qabstractitemdelegate.h \
@@ -193,9 +205,13 @@ C:/Users/Zacky/Desktop/iPop/build/Desktop_Qt_6_12_0_MinGW_64_bit_Debug/ipop_auto
   C:/Qt/6.12.0/mingw_64/include/QtWidgets/qabstractscrollarea.h \
   C:/Qt/6.12.0/mingw_64/include/QtWidgets/qabstractslider.h \
   C:/Qt/6.12.0/mingw_64/include/QtWidgets/qabstractspinbox.h \
+  C:/Qt/6.12.0/mingw_64/include/QtWidgets/qboxlayout.h \
   C:/Qt/6.12.0/mingw_64/include/QtWidgets/qcombobox.h \
   C:/Qt/6.12.0/mingw_64/include/QtWidgets/qframe.h \
+  C:/Qt/6.12.0/mingw_64/include/QtWidgets/qgridlayout.h \
   C:/Qt/6.12.0/mingw_64/include/QtWidgets/qlabel.h \
+  C:/Qt/6.12.0/mingw_64/include/QtWidgets/qlayout.h \
+  C:/Qt/6.12.0/mingw_64/include/QtWidgets/qlayoutitem.h \
   C:/Qt/6.12.0/mingw_64/include/QtWidgets/qlineedit.h \
   C:/Qt/6.12.0/mingw_64/include/QtWidgets/qmainwindow.h \
   C:/Qt/6.12.0/mingw_64/include/QtWidgets/qpushbutton.h \
@@ -443,4 +459,5 @@ C:/Users/Zacky/Desktop/iPop/build/Desktop_Qt_6_12_0_MinGW_64_bit_Debug/ipop_auto
   C:/Users/Zacky/Desktop/iPop/src/core/Playlist.h \
   C:/Users/Zacky/Desktop/iPop/src/core/Track.h \
   C:/Users/Zacky/Desktop/iPop/src/ui/CapacityBar.h \
+  C:/Users/Zacky/Desktop/iPop/src/ui/ITunesPlayerWidget.h \
   C:/Users/Zacky/Desktop/iPop/src/ui/TrackTableModel.h

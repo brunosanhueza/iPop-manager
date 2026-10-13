@@ -16,6 +16,8 @@ public:
     uint64_t sizeBytes{0};
     QString fileType{"MP3"};
     QString filePath{""};      // Ruta dentro del iPod
+    int trackNumber{1};
+    int year{2026};
     bool selected{false};
 
     QString formattedDuration() const {

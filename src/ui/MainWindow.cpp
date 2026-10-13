@@ -6,11 +6,24 @@
 #include <QGroupBox>
 #include <QFileDialog>
 #include <QMessageBox>
+#include <QInputDialog>
+#include <QMenu>
 #include <QProcess>
 #include <QStatusBar>
 #include <QFrame>
 #include <QHeaderView>
 #include <QTimer>
+#include <QThread>
+#include <QApplication>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QMimeData>
+#include <QUrl>
+#include <QDirIterator>
+#include "DeleteProgressDialog.h"
+#include "../core/AudioConverter.h"
+#include "../core/TrackImporter.h"
+#include "../core/ITunesDBReader.h"
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -23,6 +36,7 @@ MainWindow::MainWindow(QWidget* parent)
     setWindowTitle("iPop - Gestor de iPod");
     resize(1180, 780);
     setMinimumSize(980, 640);
+    setAcceptDrops(true);
 
     setupUi();
 
@@ -140,6 +154,12 @@ void MainWindow::setupUi() {
     m_itunesWarningFrame->setVisible(false);
     rootLayout->addWidget(m_itunesWarningFrame);
 
+    // 1.5 Reproductor de Medios Integrado (Estilo iTunes)
+    m_playerWidget = new ITunesPlayerWidget(this);
+    connect(m_playerWidget, &ITunesPlayerWidget::requestNextTrack, this, &MainWindow::onPlayerNextTrack);
+    connect(m_playerWidget, &ITunesPlayerWidget::requestPreviousTrack, this, &MainWindow::onPlayerPrevTrack);
+    rootLayout->addWidget(m_playerWidget);
+
     // 2. Zona Central: Organizador de Carpetas / Ficheros (Árbol) a la izquierda y Tabla de Canciones a la derecha
     auto* splitter = new QSplitter(Qt::Horizontal, this);
     splitter->setHandleWidth(4);
@@ -156,16 +176,72 @@ void MainWindow::setupUi() {
     treeHeader->setStyleSheet("color: #64748B; font-size: 11px; font-weight: bold; letter-spacing: 1px; padding-left: 6px;");
     treeLayout->addWidget(treeHeader);
 
+    // Barra de acciones para listas de reproducción
+    auto* plToolsGrid = new QGridLayout();
+    plToolsGrid->setSpacing(6);
+    plToolsGrid->setContentsMargins(2, 0, 2, 4);
+
+    m_newPlBtn = new QPushButton("➕ Nueva", this);
+    m_newPlBtn->setToolTip("Crear una nueva lista de reproducción en el iPod");
+    m_newPlBtn->setStyleSheet(
+        "QPushButton { background-color: #334155; color: #F8FAFC; border-radius: 6px; padding: 5px 8px; font-size: 11px; font-weight: 500; } "
+        "QPushButton:hover { background-color: #475569; }"
+    );
+    connect(m_newPlBtn, &QPushButton::clicked, this, &MainWindow::onNewPlaylist);
+    plToolsGrid->addWidget(m_newPlBtn, 0, 0);
+
+    m_selectAllPlBtn = new QPushButton("☑️ Todas", this);
+    m_selectAllPlBtn->setToolTip("Seleccionar o deseleccionar todas las listas de reproducción");
+    m_selectAllPlBtn->setStyleSheet(
+        "QPushButton { background-color: #334155; color: #F8FAFC; border-radius: 6px; padding: 5px 8px; font-size: 11px; font-weight: 500; } "
+        "QPushButton:hover { background-color: #475569; }"
+    );
+    connect(m_selectAllPlBtn, &QPushButton::clicked, this, &MainWindow::onToggleSelectAllPlaylists);
+    plToolsGrid->addWidget(m_selectAllPlBtn, 0, 1);
+
+    m_editPlBtn = new QPushButton("✏️ Editar", this);
+    m_editPlBtn->setToolTip("Editar o renombrar la lista (habilitado si seleccionas exactamente una lista)");
+    m_editPlBtn->setEnabled(false);
+    m_editPlBtn->setStyleSheet(
+        "QPushButton { background-color: #1E293B; color: #475569; border: 1px solid #334155; border-radius: 6px; padding: 5px 8px; font-size: 11px; font-weight: 500; } "
+        "QPushButton:hover { background-color: #475569; color: white; } "
+        "QPushButton:disabled { background-color: #1E293B; color: #475569; border: 1px solid #334155; }"
+    );
+    connect(m_editPlBtn, &QPushButton::clicked, this, &MainWindow::onEditSelectedPlaylist);
+    plToolsGrid->addWidget(m_editPlBtn, 1, 0);
+
+    m_deletePlBtn = new QPushButton("🗑️ Eliminar", this);
+    m_deletePlBtn->setToolTip("Eliminar las listas de reproducción seleccionadas");
+    m_deletePlBtn->setEnabled(false);
+    m_deletePlBtn->setStyleSheet(
+        "QPushButton { background-color: #1E293B; color: #475569; border: 1px solid #334155; border-radius: 6px; padding: 5px 8px; font-size: 11px; font-weight: 500; } "
+        "QPushButton:hover { background-color: #B91C1C; color: white; } "
+        "QPushButton:disabled { background-color: #1E293B; color: #475569; border: 1px solid #334155; }"
+    );
+    connect(m_deletePlBtn, &QPushButton::clicked, this, &MainWindow::onDeleteSelectedPlaylists);
+    plToolsGrid->addWidget(m_deletePlBtn, 1, 1);
+
+    treeLayout->addLayout(plToolsGrid);
+
     m_treeOrganizer = new QTreeWidget(this);
     m_treeOrganizer->setHeaderHidden(true);
     m_treeOrganizer->setAnimated(true);
+    m_treeOrganizer->setContextMenuPolicy(Qt::CustomContextMenu);
     m_treeOrganizer->setStyleSheet(
         "QTreeWidget { background-color: transparent; border: none; color: #E2E8F0; font-size: 13px; } "
         "QTreeWidget::item { padding: 6px 8px; border-radius: 6px; margin: 1px 0; } "
         "QTreeWidget::item:hover { background-color: #334155; } "
-        "QTreeWidget::item:selected { background-color: #2563EB; color: white; font-weight: 500; }"
+        "QTreeWidget::item:selected { background-color: #2563EB; color: white; font-weight: 500; } "
+        "QTreeWidget::indicator { width: 14px; height: 14px; border-radius: 3px; border: 1px solid #475569; background-color: #0F172A; } "
+        "QTreeWidget::indicator:hover { border: 1px solid #38BDF8; } "
+        "QTreeWidget::indicator:checked { background-color: #2563EB; border: 1px solid #38BDF8; }"
     );
     connect(m_treeOrganizer, &QTreeWidget::itemClicked, this, &MainWindow::onTreeItemClicked);
+    connect(m_treeOrganizer, &QTreeWidget::itemChanged, this, &MainWindow::onTreeItemChanged);
+    connect(m_treeOrganizer, &QTreeWidget::customContextMenuRequested, this, &MainWindow::onTreeContextMenu);
+    connect(m_treeOrganizer, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem*, QTreeWidgetItem*) {
+        updatePlaylistActionButtons();
+    });
     treeLayout->addWidget(m_treeOrganizer, 1);
 
     splitter->addWidget(treeWidget);
@@ -271,6 +347,7 @@ void MainWindow::setupUi() {
     m_trackTable->setColumnWidth(TrackTableModel::ColSize, 85);
 
     connect(m_trackModel, &TrackTableModel::selectionChanged, this, &MainWindow::onSelectionChanged);
+    connect(m_trackTable, &QTableView::doubleClicked, this, &MainWindow::onTrackDoubleClicked);
 
     songsLayout->addWidget(m_trackTable, 1);
     splitter->addWidget(songsWidget);
@@ -365,10 +442,15 @@ void MainWindow::onDeviceSelected(int index) {
 }
 
 void MainWindow::populateTreeOrganizer() {
+    m_treeOrganizer->blockSignals(true);
     m_treeOrganizer->clear();
     m_currentPlaylistIndex = -1;
 
-    if (!m_currentDevice || !m_currentDevice->isValid()) return;
+    if (!m_currentDevice || !m_currentDevice->isValid()) {
+        m_treeOrganizer->blockSignals(false);
+        updatePlaylistActionButtons();
+        return;
+    }
 
     // Raíz: Dispositivo
     auto* rootItem = new QTreeWidgetItem(m_treeOrganizer);
@@ -426,15 +508,19 @@ void MainWindow::populateTreeOrganizer() {
         auto* plItem = new QTreeWidgetItem(plBranch);
         plItem->setText(0, QString("🎶 %1 (%2)").arg(pl.name).arg(pl.trackCount()));
         plItem->setData(0, Qt::UserRole, idx);
+        plItem->setFlags(plItem->flags() | Qt::ItemIsUserCheckable);
+        plItem->setCheckState(0, Qt::Unchecked);
         if (!firstUserItem) firstUserItem = plItem;
     }
 
     rootItem->setExpanded(true);
     devBranch->setExpanded(true);
     plBranch->setExpanded(true);
+    m_treeOrganizer->blockSignals(false);
 
     m_treeOrganizer->setCurrentItem(musicItem);
     onTreeItemClicked(musicItem, 0);
+    updatePlaylistActionButtons();
 }
 
 void MainWindow::onTreeItemClicked(QTreeWidgetItem* item, int /*column*/) {
@@ -450,6 +536,7 @@ void MainWindow::onTreeItemClicked(QTreeWidgetItem* item, int /*column*/) {
         m_activeTracks.clear();
         m_trackModel->setTracks({});
         m_currentPlaylistIndex = -1;
+        updatePlaylistActionButtons();
         return;
     }
 
@@ -471,6 +558,7 @@ void MainWindow::onTreeItemClicked(QTreeWidgetItem* item, int /*column*/) {
     } else {
         onFilterTracks(filter);
     }
+    updatePlaylistActionButtons();
 }
 
 void MainWindow::onToggleSelectAll() {
@@ -550,7 +638,23 @@ void MainWindow::onDeleteSelectedTracks() {
 
     if (reply == QMessageBox::Yes) {
         int savedPlaylistIndex = m_currentPlaylistIndex;
-        m_currentDevice->deleteTracks(ids, m_currentPlaylistIndex);
+
+        // Mostrar barra de progreso visual de 0.0 MB a X.X MB
+        uint64_t totalBytesToDelete = m_currentDevice->calculateTracksSizeBytes(ids);
+        DeleteProgressDialog progressDlg(this);
+        progressDlg.setTotalBytes(totalBytesToDelete);
+        progressDlg.show();
+
+        auto progressCallback = [&progressDlg](uint64_t currentBytes, uint64_t /*totalBytes*/, const QString& statusText) {
+            progressDlg.updateProgress(currentBytes, statusText);
+            QThread::msleep(35); // Breve pausa visual para que el usuario aprecie el progreso suave
+        };
+
+        m_currentDevice->deleteTracks(ids, m_currentPlaylistIndex, progressCallback);
+
+        progressDlg.setComplete("Canciones eliminadas físicamente y base de datos actualizada.");
+        progressDlg.close();
+
         updateDeviceView();
         populateTreeOrganizer();
         selectPlaylistIndex(savedPlaylistIndex);
@@ -605,29 +709,34 @@ void MainWindow::onEjectDevice() {
     auto reply = QMessageBox::question(
         this,
         "Expulsar iPod",
-        QString("¿Deseas expulsar con seguridad el iPod en \"%1\"?").arg(mount),
+        QString("¿Deseas expulsar con seguridad el iPod en \"%1\"?\n\n"
+                "La base de datos se sincronizará y el iPod cambiará su pantalla a 'Aceptable desconectar' (OK to disconnect) o al menú principal.").arg(mount),
         QMessageBox::Yes | QMessageBox::No
     );
 
     if (reply == QMessageBox::Yes) {
-        statusBar()->showMessage("Sincronizando y expulsando...");
-#if defined(Q_OS_WIN)
-        QMessageBox::information(this, "Listo", "Dispositivo listo para desconectar de forma segura.");
-        onRefreshDevices();
-#else
-        QProcess::execute("sync");
-        int exitCode = QProcess::execute("eject", {mount});
-        if (exitCode != 0) {
-            exitCode = QProcess::execute("umount", {mount});
-        }
+        statusBar()->showMessage("Sincronizando y expulsando dispositivo...");
+        QApplication::processEvents();
 
-        if (exitCode == 0) {
-            QMessageBox::information(this, "Listo", "El iPod ha sido expulsado con seguridad. Ya puedes desconectarlo.");
+        QString errorMsg;
+        bool ok = m_currentDevice->eject(&errorMsg);
+
+        if (ok) {
+            QMessageBox::information(
+                this,
+                "iPod Expulsado",
+                "El iPod ha sido expulsado con seguridad.\n\n"
+                "En la pantalla del iPod aparecerá 'Aceptable desconectar' (OK to disconnect) o el menú principal de música. Ya puedes retirar el cable con total seguridad."
+            );
             onRefreshDevices();
         } else {
-            QMessageBox::warning(this, "Atención", "No se pudo expulsar automáticamente el dispositivo. Intenta cerrarlo desde el explorador de archivos.");
+            QMessageBox::warning(
+                this,
+                "Error al expulsar",
+                QString("No se pudo expulsar automáticamente el iPod:\n%1\n\n"
+                        "Asegúrate de que iTunes no esté en ejecución ni haya exploradores de archivos abiertos en la unidad.").arg(errorMsg)
+            );
         }
-#endif
     }
 }
 
@@ -700,4 +809,558 @@ bool MainWindow::killITunesProcess() {
     return false;
 #endif
 }
+
+void MainWindow::onTrackDoubleClicked(const QModelIndex& index) {
+    if (!index.isValid() || !m_currentDevice || !m_currentDevice->isValid()) return;
+    int row = index.row();
+    if (row < 0 || row >= m_activeTracks.size()) return;
+
+    const Track& track = m_activeTracks.at(row);
+    QString physPath = ITunesDBReader::resolvePhysicalPath(m_currentDevice->mountPath(), track.filePath);
+    if (m_playerWidget) {
+        m_playerWidget->loadAndPlayTrack(track, physPath);
+    }
+}
+
+void MainWindow::onPlayerNextTrack() {
+    if (m_activeTracks.isEmpty() || !m_currentDevice || !m_currentDevice->isValid() || !m_playerWidget) return;
+
+    uint32_t curId = m_playerWidget->currentTrackId();
+    int curIdx = -1;
+    for (int i = 0; i < m_activeTracks.size(); ++i) {
+        if (m_activeTracks[i].id == curId) {
+            curIdx = i;
+            break;
+        }
+    }
+
+    int nextIdx = (curIdx + 1) % m_activeTracks.size();
+    const Track& track = m_activeTracks.at(nextIdx);
+    QString physPath = ITunesDBReader::resolvePhysicalPath(m_currentDevice->mountPath(), track.filePath);
+    m_playerWidget->loadAndPlayTrack(track, physPath);
+    m_trackTable->selectRow(nextIdx);
+}
+
+void MainWindow::onPlayerPrevTrack() {
+    if (m_activeTracks.isEmpty() || !m_currentDevice || !m_currentDevice->isValid() || !m_playerWidget) return;
+
+    uint32_t curId = m_playerWidget->currentTrackId();
+    int curIdx = -1;
+    for (int i = 0; i < m_activeTracks.size(); ++i) {
+        if (m_activeTracks[i].id == curId) {
+            curIdx = i;
+            break;
+        }
+    }
+
+    int prevIdx = (curIdx - 1 + m_activeTracks.size()) % m_activeTracks.size();
+    const Track& track = m_activeTracks.at(prevIdx);
+    QString physPath = ITunesDBReader::resolvePhysicalPath(m_currentDevice->mountPath(), track.filePath);
+    m_playerWidget->loadAndPlayTrack(track, physPath);
+    m_trackTable->selectRow(prevIdx);
+}
+
+void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
+    if (event->mimeData()->hasUrls()) {
+        event->acceptProposedAction();
+    }
+}
+
+void MainWindow::dragMoveEvent(QDragMoveEvent* event) {
+    if (event->mimeData()->hasUrls()) {
+        event->acceptProposedAction();
+    }
+}
+
+void MainWindow::dropEvent(QDropEvent* event) {
+    const QList<QUrl> urls = event->mimeData()->urls();
+    QStringList paths;
+    for (const auto& url : urls) {
+        if (url.isLocalFile()) {
+            paths.append(url.toLocalFile());
+        }
+    }
+    if (!paths.isEmpty()) {
+        handleDroppedFiles(paths);
+    }
+}
+
+void MainWindow::handleDroppedFiles(const QStringList& filePaths) {
+    if (!m_currentDevice || !m_currentDevice->isValid()) {
+        QMessageBox::warning(this, "Sin iPod", "Conecta o selecciona un iPod antes de agregar canciones.");
+        return;
+    }
+
+    checkITunesStatus();
+    if (isITunesRunning()) {
+        auto ans = QMessageBox::warning(
+            this,
+            "iTunes en Ejecución",
+            "iTunes está abierto en segundo plano. Para evitar que sobrescriba o bloquee la base de datos del iPod, se recomienda cerrarlo.\n\n"
+            "¿Deseas cerrar iTunes automáticamente ahora para continuar?",
+            QMessageBox::Yes | QMessageBox::No
+        );
+        if (ans == QMessageBox::Yes) {
+            killITunesProcess();
+            checkITunesStatus();
+        } else {
+            return;
+        }
+    }
+
+    const QSet<QString> supportedExts = {
+        "mp3", "m4a", "aac", "m4b", "wav", "aif", "aiff",
+        "flac", "ogg", "oga", "opus", "wma", "ape", "wv", "webm", "mka"
+    };
+
+    QStringList audioFiles;
+    for (const auto& p : filePaths) {
+        QFileInfo fi(p);
+        if (fi.isDir()) {
+            QDirIterator it(p, QDir::Files, QDirIterator::Subdirectories);
+            while (it.hasNext()) {
+                QString subP = it.next();
+                QString ext = QFileInfo(subP).suffix().toLower();
+                if (supportedExts.contains(ext)) {
+                    audioFiles.append(subP);
+                }
+            }
+        } else if (fi.isFile()) {
+            QString ext = fi.suffix().toLower();
+            if (supportedExts.contains(ext)) {
+                audioFiles.append(p);
+            }
+        }
+    }
+
+    if (audioFiles.isEmpty()) {
+        QMessageBox::information(this, "Sin archivos de audio", "No se encontraron archivos de audio reconocibles en los elementos arrastrados.");
+        return;
+    }
+
+    QString modelName = m_currentDevice->modelName();
+    QStringList compatibleFiles;
+    QStringList incompatibleFiles;
+    QStringList incompatibleReasons;
+
+    for (const auto& f : audioFiles) {
+        auto check = AudioConverter::checkCompatibility(f, modelName);
+        if (check.isSupported) {
+            compatibleFiles.append(f);
+        } else {
+            incompatibleFiles.append(f);
+            incompatibleReasons.append(QString("• %1: %2").arg(QFileInfo(f).fileName()).arg(check.reason));
+        }
+    }
+
+    QStringList filesToImport = compatibleFiles;
+
+    if (!incompatibleFiles.isEmpty()) {
+        QString details = incompatibleReasons.mid(0, 6).join("\n");
+        if (incompatibleReasons.size() > 6) {
+            details += QString("\n... y %1 archivos adicionales.").arg(incompatibleReasons.size() - 6);
+        }
+
+        QString targetFmt = (modelName.contains("1G") || modelName.contains("2G")) ? "MP3 (320 kbps)" : "M4A (AAC 256 kbps de alta fidelidad)";
+
+        auto reply = QMessageBox::question(
+            this,
+            "Compatibilidad de Códec con " + modelName,
+            QString("Se detectaron %1 archivo(s) cuyo formato o códec no es reproducible por el hardware de tu %2:\n\n%3\n\n"
+                    "¿Deseas convertirlos automáticamente a %4 manteniendo todas sus etiquetas y carátulas?")
+                .arg(incompatibleFiles.size()).arg(modelName).arg(details).arg(targetFmt),
+            QMessageBox::Yes | QMessageBox::No
+        );
+
+        if (reply == QMessageBox::Yes) {
+            auto* progressDlg = new DeleteProgressDialog(this);
+            progressDlg->setTitleText("Convirtiendo canciones incompatibles", "⚙️");
+            uint64_t incompTotalBytes = 0;
+            for (const auto& f : incompatibleFiles) incompTotalBytes += QFileInfo(f).size();
+            progressDlg->setTotalBytes(incompTotalBytes);
+            progressDlg->show();
+            QApplication::processEvents();
+
+            QString tempDir = QDir::temp().filePath("iPop_Converted");
+            QDir().mkpath(tempDir);
+
+            int convertedCount = 0;
+            uint64_t incompAccumBytes = 0;
+            for (const auto& src : incompatibleFiles) {
+                QFileInfo fi(src);
+                uint64_t fSize = fi.size();
+                QString extOut = (modelName.contains("1G") || modelName.contains("2G")) ? "mp3" : "m4a";
+                QString dest = QDir(tempDir).filePath(fi.completeBaseName() + "." + extOut);
+
+                progressDlg->updateProgress(incompAccumBytes, QString("Convirtiendo (%1/%2): %3...")
+                    .arg(convertedCount + 1).arg(incompatibleFiles.size()).arg(fi.fileName()));
+
+                bool ok = AudioConverter::convertToCompatibleFormat(src, dest, [&](int pct, const QString& status) {
+                    Q_UNUSED(status);
+                    uint64_t curEstimate = incompAccumBytes + (fSize * pct) / 100;
+                    progressDlg->updateProgress(curEstimate, QString("Convirtiendo (%1/%2): %3...")
+                        .arg(convertedCount + 1).arg(incompatibleFiles.size()).arg(fi.fileName()));
+                });
+
+                incompAccumBytes += fSize;
+
+                if (ok && QFile::exists(dest)) {
+                    filesToImport.append(dest);
+                    convertedCount++;
+                }
+            }
+            progressDlg->close();
+            progressDlg->deleteLater();
+        }
+    }
+
+    if (filesToImport.isEmpty()) {
+        return;
+    }
+
+    uint64_t totalBytes = 0;
+    for (const auto& f : filesToImport) {
+        totalBytes += QFileInfo(f).size();
+    }
+
+    auto* importDlg = new DeleteProgressDialog(this);
+    importDlg->setTitleText("Agregando canciones al iPod", "📥");
+    importDlg->setTotalBytes(totalBytes);
+    importDlg->show();
+    QApplication::processEvents();
+
+    QString fwGuid = m_currentDevice->serialNumber();
+    bool importOk = TrackImporter::importTracksToDevice(
+        m_currentDevice->mountPath(),
+        fwGuid,
+        filesToImport,
+        [&](int cur, int tot, uint64_t curBytes, uint64_t totBytes, const QString& status) {
+            Q_UNUSED(cur);
+            Q_UNUSED(tot);
+            Q_UNUSED(totBytes);
+            importDlg->updateProgress(curBytes, status);
+        }
+    );
+
+    importDlg->setComplete("¡Canciones transferidas con éxito!");
+    importDlg->close();
+    importDlg->deleteLater();
+
+    if (importOk) {
+        m_currentDevice->loadPlaylists();
+        m_currentDevice->refreshStorageBreakdown();
+        updateDeviceView();
+        populateTreeOrganizer();
+        selectPlaylistIndex(0);
+
+        QMessageBox::information(
+            this,
+            "Transferencia completada",
+            QString("¡Se agregaron %1 canciones con éxito a tu %2!\n\n"
+                    "La base de datos iTunesDB ha sido sincronizada y las canciones están listas para reproducirse.")
+                .arg(filesToImport.size()).arg(m_currentDevice->modelName())
+        );
+    } else {
+        QMessageBox::warning(
+            this,
+            "Error al transferir",
+            "No se pudieron transferir los archivos o actualizar la base de datos iTunesDB en el iPod."
+        );
+    }
+}
+
+QList<int> MainWindow::getCheckedPlaylistIndices() const {
+    QList<int> result;
+    if (!m_treeOrganizer) return result;
+    QTreeWidgetItemIterator it(m_treeOrganizer);
+    while (*it) {
+        QTreeWidgetItem* item = *it;
+        if (item->checkState(0) == Qt::Checked) {
+            int idx = item->data(0, Qt::UserRole).toInt();
+            if (idx > 0) {
+                result.append(idx);
+            }
+        }
+        ++it;
+    }
+    return result;
+}
+
+void MainWindow::updatePlaylistActionButtons() {
+    if (!m_treeOrganizer) return;
+
+    QList<int> checked = getCheckedPlaylistIndices();
+    int count = checked.size();
+
+    QTreeWidgetItem* cur = m_treeOrganizer->currentItem();
+    int currentIdx = (cur && cur->data(0, Qt::UserRole).isValid()) ? cur->data(0, Qt::UserRole).toInt() : -1;
+    bool hasSingleFocusedUserPl = (count == 0 && currentIdx > 0);
+
+    // Contar total de listas de usuario
+    int totalUserPls = 0;
+    QTreeWidgetItemIterator itCount(m_treeOrganizer);
+    while (*itCount) {
+        if ((*itCount)->data(0, Qt::UserRole).toInt() > 0) totalUserPls++;
+        ++itCount;
+    }
+
+    // Botón "Todas" / "Deselec."
+    if (m_selectAllPlBtn) {
+        bool allChecked = (totalUserPls > 0 && count == totalUserPls);
+        m_allPlaylistsChecked = allChecked;
+        m_selectAllPlBtn->setText(allChecked ? "☑️ Deselec." : "☑️ Todas");
+        m_selectAllPlBtn->setEnabled(totalUserPls > 0);
+    }
+
+    // Botón "Editar": habilitado ÚNICAMENTE si se selecciona una sola lista
+    bool canEdit = (count == 1) || hasSingleFocusedUserPl;
+    if (m_editPlBtn) {
+        m_editPlBtn->setEnabled(canEdit);
+        if (canEdit) {
+            m_editPlBtn->setStyleSheet(
+                "QPushButton { background-color: #2563EB; color: white; border-radius: 6px; padding: 5px 8px; font-size: 11px; font-weight: bold; } "
+                "QPushButton:hover { background-color: #1D4ED8; }"
+            );
+        } else {
+            m_editPlBtn->setStyleSheet(
+                "QPushButton { background-color: #1E293B; color: #475569; border: 1px solid #334155; border-radius: 6px; padding: 5px 8px; font-size: 11px; font-weight: 500; } "
+                "QPushButton:disabled { background-color: #1E293B; color: #475569; border: 1px solid #334155; }"
+            );
+        }
+    }
+
+    // Botón "Eliminar": habilitado si hay >= 1 lista seleccionada
+    bool canDelete = (count >= 1) || hasSingleFocusedUserPl;
+    if (m_deletePlBtn) {
+        m_deletePlBtn->setEnabled(canDelete);
+        if (canDelete) {
+            if (count > 1) {
+                m_deletePlBtn->setText(QString("🗑️ Eliminar (%1)").arg(count));
+            } else {
+                m_deletePlBtn->setText("🗑️ Eliminar");
+            }
+            m_deletePlBtn->setStyleSheet(
+                "QPushButton { background-color: #DC2626; color: white; border-radius: 6px; padding: 5px 8px; font-size: 11px; font-weight: bold; } "
+                "QPushButton:hover { background-color: #B91C1C; }"
+            );
+        } else {
+            m_deletePlBtn->setText("🗑️ Eliminar");
+            m_deletePlBtn->setStyleSheet(
+                "QPushButton { background-color: #1E293B; color: #475569; border: 1px solid #334155; border-radius: 6px; padding: 5px 8px; font-size: 11px; font-weight: 500; } "
+                "QPushButton:disabled { background-color: #1E293B; color: #475569; border: 1px solid #334155; }"
+            );
+        }
+    }
+}
+
+void MainWindow::onTreeItemChanged(QTreeWidgetItem* item, int column) {
+    Q_UNUSED(item);
+    Q_UNUSED(column);
+    updatePlaylistActionButtons();
+}
+
+void MainWindow::onTreeContextMenu(const QPoint& pos) {
+    if (!m_currentDevice || !m_currentDevice->isValid()) return;
+
+    QTreeWidgetItem* item = m_treeOrganizer->itemAt(pos);
+    QMenu menu(this);
+    menu.setStyleSheet(
+        "QMenu { background-color: #1E293B; color: #F8FAFC; border: 1px solid #334155; padding: 4px; border-radius: 6px; font-size: 12px; } "
+        "QMenu::item { padding: 6px 20px 6px 12px; border-radius: 4px; } "
+        "QMenu::item:selected { background-color: #2563EB; color: white; } "
+        "QMenu::item:disabled { color: #64748B; }"
+    );
+
+    menu.addAction("➕ Nueva lista de reproducción...", this, &MainWindow::onNewPlaylist);
+
+    if (item && item->data(0, Qt::UserRole).toInt() > 0) {
+        int idx = item->data(0, Qt::UserRole).toInt();
+        menu.addSeparator();
+
+        menu.addAction("✏️ Renombrar lista...", [this, idx]() {
+            renamePlaylistByIndex(idx);
+        });
+
+        QList<int> checked = getCheckedPlaylistIndices();
+        if (checked.size() > 1 && checked.contains(idx)) {
+            menu.addAction(QString("🗑️ Eliminar %1 listas seleccionadas...").arg(checked.size()), [this, checked]() {
+                deletePlaylistsByIndices(checked);
+            });
+        } else {
+            menu.addAction("🗑️ Eliminar lista...", [this, idx]() {
+                deletePlaylistsByIndices({idx});
+            });
+        }
+    }
+
+    menu.exec(m_treeOrganizer->viewport()->mapToGlobal(pos));
+}
+
+void MainWindow::onToggleSelectAllPlaylists() {
+    if (!m_treeOrganizer) return;
+
+    QList<int> checked = getCheckedPlaylistIndices();
+    int totalUserPls = 0;
+    QTreeWidgetItemIterator itCount(m_treeOrganizer);
+    while (*itCount) {
+        if ((*itCount)->data(0, Qt::UserRole).toInt() > 0) totalUserPls++;
+        ++itCount;
+    }
+
+    bool selectAll = (checked.size() < totalUserPls);
+
+    m_treeOrganizer->blockSignals(true);
+    QTreeWidgetItemIterator it(m_treeOrganizer);
+    while (*it) {
+        QTreeWidgetItem* item = *it;
+        if (item->data(0, Qt::UserRole).toInt() > 0) {
+            item->setCheckState(0, selectAll ? Qt::Checked : Qt::Unchecked);
+        }
+        ++it;
+    }
+    m_treeOrganizer->blockSignals(false);
+
+    updatePlaylistActionButtons();
+}
+
+void MainWindow::onEditSelectedPlaylist() {
+    QList<int> checked = getCheckedPlaylistIndices();
+    int targetIdx = -1;
+    if (checked.size() == 1) {
+        targetIdx = checked.first();
+    } else if (checked.isEmpty()) {
+        QTreeWidgetItem* cur = m_treeOrganizer->currentItem();
+        if (cur && cur->data(0, Qt::UserRole).toInt() > 0) {
+            targetIdx = cur->data(0, Qt::UserRole).toInt();
+        }
+    }
+
+    if (targetIdx > 0) {
+        renamePlaylistByIndex(targetIdx);
+    }
+}
+
+void MainWindow::renamePlaylistByIndex(int idx) {
+    if (!m_currentDevice || idx <= 0) return;
+    const auto pls = m_currentDevice->playlists();
+    if (idx >= pls.size()) return;
+
+    QString currentName = pls[idx].name;
+    bool ok = false;
+    QString newName = QInputDialog::getText(
+        this,
+        "Renombrar lista de reproducción",
+        QString("Nuevo nombre para '%1':").arg(currentName),
+        QLineEdit::Normal,
+        currentName,
+        &ok
+    );
+
+    if (!ok) return;
+    newName = newName.trimmed();
+    if (newName.isEmpty() || newName == currentName) return;
+
+    QString errorMsg;
+    if (m_currentDevice->renamePlaylist(idx, newName, &errorMsg)) {
+        populateTreeOrganizer();
+        selectPlaylistIndex(idx);
+        statusBar()->showMessage(QString("Lista renombrada a '%1'").arg(newName), 3000);
+    } else {
+        QMessageBox::warning(this, "Error", errorMsg.isEmpty() ? "No se pudo renombrar la lista." : errorMsg);
+    }
+}
+
+void MainWindow::onDeleteSelectedPlaylists() {
+    QList<int> checked = getCheckedPlaylistIndices();
+    if (checked.isEmpty()) {
+        QTreeWidgetItem* cur = m_treeOrganizer->currentItem();
+        if (cur && cur->data(0, Qt::UserRole).toInt() > 0) {
+            checked.append(cur->data(0, Qt::UserRole).toInt());
+        }
+    }
+
+    if (!checked.isEmpty()) {
+        deletePlaylistsByIndices(checked);
+    }
+}
+
+void MainWindow::deletePlaylistsByIndices(const QList<int>& indices) {
+    if (!m_currentDevice || indices.isEmpty()) return;
+
+    QList<int> validIndices;
+    for (int idx : indices) {
+        if (idx > 0) validIndices.append(idx);
+    }
+    if (validIndices.isEmpty()) return;
+
+    const auto pls = m_currentDevice->playlists();
+    QString confirmText;
+    if (validIndices.size() == 1) {
+        int idx = validIndices.first();
+        QString name = (idx < pls.size()) ? pls[idx].name : "la lista seleccionada";
+        confirmText = QString("¿Estás seguro de que deseas eliminar la lista de reproducción \"%1\" del iPod?\n\n(Las canciones permanecerán intactas en el iPod).").arg(name);
+    } else {
+        confirmText = QString("¿Estás seguro de que deseas eliminar las %1 listas de reproducción seleccionadas del iPod?\n\n(Las canciones permanecerán intactas en el iPod).").arg(validIndices.size());
+    }
+
+    auto reply = QMessageBox::question(
+        this,
+        "Eliminar listas de reproducción",
+        confirmText,
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No
+    );
+
+    if (reply != QMessageBox::Yes) return;
+
+    QString errorMsg;
+    if (m_currentDevice->deletePlaylists(validIndices, &errorMsg)) {
+        populateTreeOrganizer();
+        selectPlaylistIndex(0);
+        statusBar()->showMessage(QString("%1 lista(s) de reproducción eliminada(s).").arg(validIndices.size()), 3000);
+    } else {
+        QMessageBox::critical(this, "Error", errorMsg.isEmpty() ? "No se pudieron eliminar las listas de reproducción." : errorMsg);
+    }
+}
+
+void MainWindow::onNewPlaylist() {
+    if (!m_currentDevice || !m_currentDevice->isValid()) {
+        QMessageBox::information(this, "Aviso", "Conecta o selecciona un iPod primero.");
+        return;
+    }
+
+    bool ok = false;
+    QString name = QInputDialog::getText(
+        this,
+        "Nueva lista de reproducción",
+        "Nombre de la nueva lista:",
+        QLineEdit::Normal,
+        "Nueva lista",
+        &ok
+    );
+
+    if (!ok) return;
+    name = name.trimmed();
+    if (name.isEmpty()) return;
+
+    QString errorMsg;
+    if (m_currentDevice->createPlaylist(name, &errorMsg)) {
+        populateTreeOrganizer();
+        const auto pls = m_currentDevice->playlists();
+        int newIdx = -1;
+        for (int i = pls.size() - 1; i >= 1; --i) {
+            if (pls[i].name == name) {
+                newIdx = i;
+                break;
+            }
+        }
+        if (newIdx > 0) {
+            selectPlaylistIndex(newIdx);
+        }
+        statusBar()->showMessage(QString("Lista \"%1\" creada con éxito.").arg(name), 3000);
+    } else {
+        QMessageBox::warning(this, "Error", errorMsg.isEmpty() ? "No se pudo crear la nueva lista." : errorMsg);
+    }
+}
+
 

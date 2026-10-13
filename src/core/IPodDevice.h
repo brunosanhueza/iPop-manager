@@ -5,8 +5,11 @@
 #include <QMap>
 #include <QList>
 #include <cstdint>
+#include <functional>
 #include "Track.h"
 #include "Playlist.h"
+
+using DeleteProgressCallback = std::function<void(uint64_t currentBytes, uint64_t totalBytes, const QString& statusText)>;
 
 enum class FileCategory {
     Audio,
@@ -63,7 +66,15 @@ public:
     // Playlists y canciones
     QList<Playlist> playlists() const { return m_playlists; }
     void loadPlaylists();
-    bool deleteTracks(const QList<uint32_t>& trackIds, int playlistIndex);
+    uint64_t calculateTracksSizeBytes(const QList<uint32_t>& trackIds) const;
+    bool deleteTracks(const QList<uint32_t>& trackIds, int playlistIndex, DeleteProgressCallback progressCb = nullptr);
+
+    bool deletePlaylists(const QList<int>& playlistIndices, QString* errorMsg = nullptr);
+    bool renamePlaylist(int playlistIndex, const QString& newName, QString* errorMsg = nullptr);
+    bool createPlaylist(const QString& name, QString* errorMsg = nullptr);
+
+    // Expulsión segura
+    bool eject(QString* errorMsg = nullptr);
 
     // Utilidades
     static QString formatBytes(uint64_t bytes);
