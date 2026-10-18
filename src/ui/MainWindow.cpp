@@ -74,6 +74,41 @@ MainWindow::MainWindow(QWidget* parent)
         }
     });
 
+    connect(&m_detector, &DeviceDetector::usbDevicesRefreshed, this,
+            [this](const QStringList& usbDevices) {
+        const bool hasMountedDevice =
+            m_currentDevice && m_currentDevice->isValid();
+
+        bool hasMountPath = false;
+        for (int i = 0; i < m_deviceCombo->count(); ++i) {
+            if (!m_deviceCombo->itemData(i).toString().isEmpty()) {
+                hasMountPath = true;
+                break;
+            }
+        }
+
+        if (!usbDevices.isEmpty() && !hasMountedDevice) {
+            if (!hasMountPath) {
+                m_deviceCombo->blockSignals(true);
+                m_deviceCombo->clear();
+                m_deviceCombo->addItem(
+                    "iPod touch detectado por USB (sin almacenamiento montado)"
+                );
+                m_deviceCombo->blockSignals(false);
+            }
+
+            statusBar()->showMessage(
+                "iPod touch detectado por USB, pero el almacenamiento "
+                "no está montado/accesible."
+            );
+        } else if (usbDevices.isEmpty() && !hasMountedDevice) {
+            statusBar()->showMessage(
+                "No se detectó ningún iPod por USB ni como almacenamiento.",
+                5000
+            );
+        }
+    });
+
     onRefreshDevices();
 }
 

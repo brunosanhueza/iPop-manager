@@ -94,6 +94,14 @@ IPodDevice::IPodDevice(const QString& mountPath)
         controlPath = dir.filePath("ipod_control");
         checkInfo.setFile(controlPath);
     }
+    if (!checkInfo.exists() || !checkInfo.isDir()) {
+        controlPath = dir.filePath("iTunes_Control");
+        checkInfo.setFile(controlPath);
+    }
+    if (!checkInfo.exists() || !checkInfo.isDir()) {
+        controlPath = dir.filePath("itunes_control");
+        checkInfo.setFile(controlPath);
+    }
 
     m_isValid = checkInfo.exists() && checkInfo.isDir();
     if (m_isValid) {

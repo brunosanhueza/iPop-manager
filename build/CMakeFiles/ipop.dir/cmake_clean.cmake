@@ -1,0 +1,41 @@
+file(REMOVE_RECURSE
+  "CMakeFiles/ipop.dir/link.d"
+  "CMakeFiles/ipop_autogen.dir/AutogenUsed.txt"
+  "CMakeFiles/ipop_autogen.dir/ParseCache.txt"
+  "ipop_autogen"
+  "CMakeFiles/ipop.dir/ipop_autogen/mocs_compilation.cpp.o"
+  "CMakeFiles/ipop.dir/ipop_autogen/mocs_compilation.cpp.o.d"
+  "CMakeFiles/ipop.dir/src/core/AudioConverter.cpp.o"
+  "CMakeFiles/ipop.dir/src/core/AudioConverter.cpp.o.d"
+  "CMakeFiles/ipop.dir/src/core/DeviceDetector.cpp.o"
+  "CMakeFiles/ipop.dir/src/core/DeviceDetector.cpp.o.d"
+  "CMakeFiles/ipop.dir/src/core/IPodDevice.cpp.o"
+  "CMakeFiles/ipop.dir/src/core/IPodDevice.cpp.o.d"
+  "CMakeFiles/ipop.dir/src/core/ITunesDBReader.cpp.o"
+  "CMakeFiles/ipop.dir/src/core/ITunesDBReader.cpp.o.d"
+  "CMakeFiles/ipop.dir/src/core/ITunesHash58.cpp.o"
+  "CMakeFiles/ipop.dir/src/core/ITunesHash58.cpp.o.d"
+  "CMakeFiles/ipop.dir/src/core/TrackImporter.cpp.o"
+  "CMakeFiles/ipop.dir/src/core/TrackImporter.cpp.o.d"
+  "CMakeFiles/ipop.dir/src/main.cpp.o"
+  "CMakeFiles/ipop.dir/src/main.cpp.o.d"
+  "CMakeFiles/ipop.dir/src/ui/CapacityBar.cpp.o"
+  "CMakeFiles/ipop.dir/src/ui/CapacityBar.cpp.o.d"
+  "CMakeFiles/ipop.dir/src/ui/DeleteProgressDialog.cpp.o"
+  "CMakeFiles/ipop.dir/src/ui/DeleteProgressDialog.cpp.o.d"
+  "CMakeFiles/ipop.dir/src/ui/ITunesPlayerWidget.cpp.o"
+  "CMakeFiles/ipop.dir/src/ui/ITunesPlayerWidget.cpp.o.d"
+  "CMakeFiles/ipop.dir/src/ui/MainWindow.cpp.o"
+  "CMakeFiles/ipop.dir/src/ui/MainWindow.cpp.o.d"
+  "CMakeFiles/ipop.dir/src/ui/TrackTableModel.cpp.o"
+  "CMakeFiles/ipop.dir/src/ui/TrackTableModel.cpp.o.d"
+  "ipop"
+  "ipop.pdb"
+  "ipop_autogen/mocs_compilation.cpp"
+  "ipop_autogen/timestamp"
+)
+
+# Per-language clean rules from dependency scanning.
+foreach(lang CXX)
+  include(CMakeFiles/ipop.dir/cmake_clean_${lang}.cmake OPTIONAL)
+endforeach()

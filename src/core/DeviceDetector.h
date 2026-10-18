@@ -2,7 +2,6 @@
 
 #include <QObject>
 #include <QStringList>
-#include <memory>
 #include "IPodDevice.h"
 
 class DeviceDetector : public QObject {
@@ -11,14 +10,17 @@ class DeviceDetector : public QObject {
 public:
     explicit DeviceDetector(QObject* parent = nullptr);
 
-    // Escanea puntos de montaje del sistema y detecta iPods conectados
+    // Devuelve las rutas de iPods montados y accesibles.
     QStringList detectDevices();
 
-    // Comprueba si una ruta específica corresponde a un iPod válido
+    // Identifica iPods conectados físicamente por USB.
+    QStringList detectUsbDevices();
+
     static bool isIpodMount(const QString& path);
 
 signals:
     void devicesRefreshed(const QStringList& ipodMounts);
+    void usbDevicesRefreshed(const QStringList& usbDevices);
 
 public slots:
     void refresh();

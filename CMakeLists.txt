@@ -13,6 +13,8 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
+find_package(SQLite3 REQUIRED)
+find_package(ZLIB REQUIRED)
 find_package(Qt6 6.2 REQUIRED COMPONENTS
     Core
     Gui
@@ -61,6 +63,8 @@ target_link_libraries(ipop PRIVATE
     Qt6::Gui
     Qt6::Widgets
     Qt6::Multimedia
+    SQLite::SQLite3
+    ZLIB::ZLIB
 )
 
 # Opciones de compilación

@@ -32,6 +32,7 @@ public:
 
 private:
     bool parseBinaryDatabase(const QString& dbPath, QList<Playlist>& outPlaylists);
+    bool parseSqliteDatabase(const QString& dbPath, QList<Playlist>& outPlaylists);
     void scanFilesFallback(QList<Playlist>& outPlaylists);
 
     QString m_mountPath;

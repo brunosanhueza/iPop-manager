@@ -7,6 +7,10 @@
 #include <QFileInfo>
 #include <QMap>
 #include <cstring>
+#include <sqlite3.h>
+#include <zlib.h>
+#include <QHash>
+#include <QSet>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -642,15 +646,26 @@ bool ITunesDBReader::read(QList<Playlist>& outPlaylists) {
     outPlaylists.clear();
 
     QDir dir(m_mountPath);
-    QString dbPath = dir.filePath("iPod_Control/iTunes/iTunesDB");
-    if (!QFile::exists(dbPath)) {
-        dbPath = dir.filePath("ipod_control/itunes/itunesdb");
+    const QStringList sqliteCandidates = {
+        dir.filePath("iTunes_Control/iTunes/iTunes Library.itlp/Library.itdb"),
+        dir.filePath("itunes_control/itunes/itunes library.itlp/library.itdb")
+    };
+
+    for (const QString& path : sqliteCandidates) {
+        if (QFile::exists(path) && parseSqliteDatabase(path, outPlaylists))
+            return true;
     }
 
-    if (QFile::exists(dbPath)) {
-        if (parseBinaryDatabase(dbPath, outPlaylists)) {
+    const QStringList binaryCandidates = {
+        dir.filePath("iPod_Control/iTunes/iTunesDB"),
+        dir.filePath("ipod_control/itunes/itunesdb"),
+        dir.filePath("iTunes_Control/iTunes/iTunesCDB"),
+        dir.filePath("itunes_control/itunes/itunescdb")
+    };
+
+    for (const QString& path : binaryCandidates) {
+        if (QFile::exists(path) && parseBinaryDatabase(path, outPlaylists))
             return true;
-        }
     }
 
     scanFilesFallback(outPlaylists);
@@ -670,8 +685,54 @@ bool ITunesDBReader::parseBinaryDatabase(const QString& dbPath, QList<Playlist>&
         return false;
     }
 
-    uint32_t mhbdHdrLen = readLE32(data.constData() + 4);
+    const uint32_t mhbdHdrLen = readLE32(data.constData() + 4);
+    if (mhbdHdrLen < 8 || mhbdHdrLen >= static_cast<uint32_t>(data.size())) {
+        return false;
+    }
+
     int offset = static_cast<int>(mhbdHdrLen);
+
+    // iTunesDB clásico: los datasets empiezan tras la cabecera mhbd.
+    // iTunesCDB: el contenido tras mhbd está comprimido con zlib.
+    if (data.size() < offset + 4 ||
+        std::memcmp(data.constData() + offset, "mhsd", 4) != 0) {
+        z_stream stream{};
+        stream.next_in = reinterpret_cast<Bytef*>(
+            data.data() + static_cast<int>(mhbdHdrLen));
+        stream.avail_in = static_cast<uInt>(
+            data.size() - static_cast<int>(mhbdHdrLen));
+
+        if (inflateInit(&stream) != Z_OK) {
+            return false;
+        }
+
+        QByteArray decompressed;
+        char buffer[65536];
+        int status = Z_OK;
+
+        while (status == Z_OK) {
+            stream.next_out = reinterpret_cast<Bytef*>(buffer);
+            stream.avail_out = static_cast<uInt>(sizeof(buffer));
+
+            status = inflate(&stream, Z_NO_FLUSH);
+            const auto produced =
+                sizeof(buffer) - static_cast<size_t>(stream.avail_out);
+
+            if (produced > 0) {
+                decompressed.append(buffer, static_cast<qsizetype>(produced));
+            }
+        }
+
+        inflateEnd(&stream);
+
+        if (status != Z_STREAM_END || decompressed.isEmpty()) {
+            return false;
+        }
+
+        data = decompressed;
+        offset = 0;
+    }
+
     const int totalSize = data.size();
 
     QMap<uint32_t, Track> trackMap;
@@ -756,7 +817,7 @@ bool ITunesDBReader::parseBinaryDatabase(const QString& dbPath, QList<Playlist>&
             }
         }
         // Dataset 2: Playlists (mhlp -> mhyp -> mhip)
-        else if (dsType == 2 && childOffset + 12 <= totalSize) {
+        else if ((dsType == 2 || dsType == 3) && childOffset + 12 <= totalSize) {
             const char* mhlpTag = data.constData() + childOffset;
             if (std::memcmp(mhlpTag, "mhlp", 4) == 0) {
                 uint32_t mhlpHdr = readLE32(mhlpTag + 4);
@@ -815,6 +876,152 @@ bool ITunesDBReader::parseBinaryDatabase(const QString& dbPath, QList<Playlist>&
 
         if (totalLen == 0) break;
         offset += static_cast<int>(totalLen);
+    }
+
+    return !outPlaylists.isEmpty();
+}
+
+
+bool ITunesDBReader::parseSqliteDatabase(
+    const QString& dbPath, QList<Playlist>& outPlaylists)
+{
+    sqlite3* db = nullptr;
+    const QByteArray pathBytes = QFile::encodeName(dbPath);
+
+    if (sqlite3_open_v2(pathBytes.constData(), &db,
+                        SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) {
+        if (db) sqlite3_close(db);
+        return false;
+    }
+
+    auto closeDb = [&]() { sqlite3_close(db); };
+    auto textColumn = [](sqlite3_stmt* s, int col) -> QString {
+        const auto* value = sqlite3_column_text(s, col);
+        return value ? QString::fromUtf8(
+            reinterpret_cast<const char*>(value)) : QString();
+    };
+
+    QHash<qint64, Track> tracksByPid;
+    QList<qint64> trackOrder;
+    sqlite3_stmt* stmt = nullptr;
+
+    const char* tracksSql =
+        "SELECT i.pid, i.title, i.artist, i.album, i.genre_id, "
+        "i.total_time_ms, i.track_number, i.year, "
+        "a.bit_rate, a.sample_rate "
+        "FROM item i "
+        "LEFT JOIN avformat_info a ON a.item_pid=i.pid "
+        "WHERE i.is_song=1 ORDER BY i.title COLLATE NOCASE";
+
+    if (sqlite3_prepare_v2(db, tracksSql, -1, &stmt, nullptr) != SQLITE_OK) {
+        closeDb();
+        return false;
+    }
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const qint64 pid = sqlite3_column_int64(stmt, 0);
+        Track track;
+        track.id = static_cast<uint32_t>(trackOrder.size() + 1);
+
+        const QString title = textColumn(stmt, 1).trimmed();
+        const QString artist = textColumn(stmt, 2).trimmed();
+        const QString album = textColumn(stmt, 3).trimmed();
+
+        track.title = title.isEmpty() ? QStringLiteral("Título desconocido") : title;
+        track.artist = artist.isEmpty() ? QStringLiteral("Artista desconocido") : artist;
+        track.album = album.isEmpty() ? QStringLiteral("Álbum desconocido") : album;
+        track.durationMs = static_cast<int>(sqlite3_column_double(stmt, 5));
+        track.trackNumber = sqlite3_column_int(stmt, 6);
+        const int year = sqlite3_column_int(stmt, 7);
+        if (year > 0) track.year = year;
+
+        const int bitrate = sqlite3_column_int(stmt, 8);
+        if (bitrate > 0) track.bitrate = bitrate;
+
+        const double sampleRate = sqlite3_column_double(stmt, 9);
+        if (sampleRate > 0) track.sampleRate = static_cast<int>(sampleRate);
+
+        // La ruta física aún no se conoce; no inventamos una.
+        track.filePath.clear();
+
+        tracksByPid.insert(pid, track);
+        trackOrder.append(pid);
+    }
+    sqlite3_finalize(stmt);
+    stmt = nullptr;
+
+    if (tracksByPid.isEmpty()) {
+        closeDb();
+        return false;
+    }
+
+    QHash<qint64, int> playlistIndexes;
+    const char* containersSql =
+        "SELECT pid, name FROM container ORDER BY name COLLATE NOCASE";
+
+    if (sqlite3_prepare_v2(db, containersSql, -1, &stmt, nullptr) != SQLITE_OK) {
+        closeDb();
+        return false;
+    }
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const qint64 pid = sqlite3_column_int64(stmt, 0);
+        const QString name = textColumn(stmt, 1).trimmed();
+        if (name.isEmpty()) continue;
+
+        Playlist playlist;
+        playlist.id = static_cast<uint32_t>(outPlaylists.size() + 1);
+        playlist.name = name;
+        playlist.isMaster = name.compare(
+            QStringLiteral("iPod de Zacky"), Qt::CaseInsensitive) == 0;
+
+        playlistIndexes.insert(pid, outPlaylists.size());
+        outPlaylists.append(playlist);
+    }
+    sqlite3_finalize(stmt);
+    stmt = nullptr;
+
+    const char* membershipSql =
+        "SELECT container_pid, item_pid "
+        "FROM item_to_container ORDER BY container_pid, physical_order";
+
+    if (sqlite3_prepare_v2(db, membershipSql, -1, &stmt, nullptr) != SQLITE_OK) {
+        outPlaylists.clear();
+        closeDb();
+        return false;
+    }
+
+    QSet<qint64> assignedMasterTracks;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const qint64 containerPid = sqlite3_column_int64(stmt, 0);
+        const qint64 itemPid = sqlite3_column_int64(stmt, 1);
+
+        if (!tracksByPid.contains(itemPid) ||
+            !playlistIndexes.contains(containerPid)) continue;
+
+        const int index = playlistIndexes.value(containerPid);
+        outPlaylists[index].tracks.append(tracksByPid.value(itemPid));
+
+        if (outPlaylists[index].isMaster)
+            assignedMasterTracks.insert(itemPid);
+    }
+    sqlite3_finalize(stmt);
+    closeDb();
+
+    // Si la biblioteca no tiene una lista maestra reconocible, conservamos
+    // todas las canciones en una lista de biblioteca, sin duplicarlas.
+    bool hasMaster = false;
+    for (const Playlist& p : outPlaylists)
+        if (p.isMaster) { hasMaster = true; break; }
+
+    if (!hasMaster) {
+        Playlist master;
+        master.id = 0;
+        master.name = QStringLiteral("Toda la música");
+        master.isMaster = true;
+        for (qint64 pid : trackOrder)
+            master.tracks.append(tracksByPid.value(pid));
+        outPlaylists.prepend(master);
     }
 
     return !outPlaylists.isEmpty();
