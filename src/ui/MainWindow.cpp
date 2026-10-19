@@ -5,6 +5,7 @@
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QFileDialog>
+#include "core/IpodTouchBridge.h"
 #include <QMessageBox>
 #include <QInputDialog>
 #include <QMenu>
@@ -181,6 +182,21 @@ void MainWindow::setupUi() {
     m_browseBtn->setStyleSheet(m_refreshBtn->styleSheet());
     connect(m_browseBtn, &QPushButton::clicked, this, &MainWindow::onBrowseCustomMount);
     rightControls->addWidget(m_browseBtn);
+
+    m_addTracksBtn = new QPushButton("➕ Añadir canciones", this);
+    m_addTracksBtn->setToolTip("Elegir archivos de música (.mp3, .m4a...) para copiarlos al iPod. También puedes arrastrarlos a la ventana.");
+    m_addTracksBtn->setStyleSheet(
+        "QPushButton { "
+        "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #FDFDFD, stop:0.5 #EDEDED, stop:0.51 #E0E0E0, stop:1 #D0D0D0); "
+        "  border: 1px solid #8E949C; border-radius: 4px; padding: 4px 10px; font-size: 11px; font-weight: 600; color: #2E3338; "
+        "} "
+        "QPushButton:hover { background: #FFFFFF; border-color: #6A7078; } "
+        "QPushButton:pressed { background: #B5BAC0; } "
+        "QPushButton:disabled { background: #E2E5E8; color: #989EA6; border-color: #CCD0D6; }"
+    );
+    m_addTracksBtn->setEnabled(false);
+    connect(m_addTracksBtn, &QPushButton::clicked, this, &MainWindow::onAddTracks);
+    rightControls->addWidget(m_addTracksBtn);
 
     m_ejectBtn = new QPushButton("⏏ Expulsar", this);
     m_ejectBtn->setToolTip("Expulsar iPod con seguridad");
@@ -714,7 +730,18 @@ void MainWindow::onDeleteSelectedTracks() {
             QThread::msleep(35); // Breve pausa visual para que el usuario aprecie el progreso suave
         };
 
-        m_currentDevice->deleteTracks(ids, m_currentPlaylistIndex, progressCallback);
+        const bool deleteOk = m_currentDevice->deleteTracks(ids, m_currentPlaylistIndex, progressCallback);
+
+        if (!deleteOk) {
+            progressDlg.close();
+            QMessageBox::warning(this, "No se pudo eliminar",
+                "No se eliminaron las canciones. Revisa que el iPod esté desbloqueado y montado, "
+                "y que estés en la biblioteca completa (en iPod Touch no se puede quitar de una lista suelta).");
+            updateDeviceView();
+            populateTreeOrganizer();
+            selectPlaylistIndex(savedPlaylistIndex);
+            return;
+        }
 
         progressDlg.setComplete("Canciones eliminadas físicamente y base de datos actualizada.");
         progressDlg.close();
@@ -722,7 +749,7 @@ void MainWindow::onDeleteSelectedTracks() {
         updateDeviceView();
         populateTreeOrganizer();
         selectPlaylistIndex(savedPlaylistIndex);
-        statusBar()->showMessage(QString("%1 canciones eliminadas permanentemente del iPod y base de datos actualizada.").arg(ids.size()));
+        statusBar()->showMessage(QString("%1 canciones eliminadas permanentemente del iPod. Reinicia el iPod (Sleep + Home) para ver el cambio.").arg(ids.size()));
     }
 }
 
@@ -740,12 +767,14 @@ void MainWindow::updateDeviceView() {
         m_totalCapacityLabel->setText("Total: —");
         m_freeCapacityLabel->setText("Libre: —");
         m_ejectBtn->setEnabled(false);
+        if (m_addTracksBtn) m_addTracksBtn->setEnabled(false);
         m_treeOrganizer->clear();
         m_trackModel->setTracks({});
         return;
     }
 
     m_ejectBtn->setEnabled(true);
+    if (m_addTracksBtn) m_addTracksBtn->setEnabled(true);
     m_modelLabel->setText(m_currentDevice->modelName());
     m_serialLabel->setText(m_currentDevice->serialNumber().isEmpty() ? "" : QString("SN: %1").arg(m_currentDevice->serialNumber()));
 
@@ -947,6 +976,20 @@ void MainWindow::onPlayerPrevTrack() {
     m_trackTable->selectRow(prevIdx);
 }
 
+void MainWindow::onAddTracks() {
+    if (!m_currentDevice || !m_currentDevice->isValid()) {
+        QMessageBox::information(this, "Aviso", "Conecta o selecciona un iPod primero.");
+        return;
+    }
+    const QStringList files = QFileDialog::getOpenFileNames(
+        this,
+        "Elegir canciones para añadir al iPod",
+        QDir::homePath(),
+        "Audio (*.mp3 *.m4a *.aac *.m4b *.wav *.aif *.aiff *.flac *.ogg *.oga *.opus *.wma);;Todos los archivos (*)"
+    );
+    if (!files.isEmpty()) handleDroppedFiles(files);
+}
+
 void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
     if (event->mimeData()->hasUrls()) {
         event->acceptProposedAction();
@@ -1026,12 +1069,20 @@ void MainWindow::handleDroppedFiles(const QStringList& filePaths) {
     }
 
     QString modelName = m_currentDevice->modelName();
+    const bool isTouch = IpodTouchBridge::isTouchLayout(m_currentDevice->mountPath());
     QStringList compatibleFiles;
     QStringList incompatibleFiles;
     QStringList incompatibleReasons;
 
     for (const auto& f : audioFiles) {
         auto check = AudioConverter::checkCompatibility(f, modelName);
+        if (isTouch) {
+            // En iPod Touch solo se cargan directo mp3/m4a/aac; lo demas se convierte a MP3
+            const QString ext = QFileInfo(f).suffix().toLower();
+            check.isSupported = (ext == "mp3" || ext == "m4a" || ext == "aac");
+            if (!check.isSupported)
+                check.reason = QString("El formato %1 no se puede cargar directamente; se convertirá a MP3.").arg(ext.toUpper());
+        }
         if (check.isSupported) {
             compatibleFiles.append(f);
         } else {
@@ -1048,7 +1099,7 @@ void MainWindow::handleDroppedFiles(const QStringList& filePaths) {
             details += QString("\n... y %1 archivos adicionales.").arg(incompatibleReasons.size() - 6);
         }
 
-        QString targetFmt = (modelName.contains("1G") || modelName.contains("2G")) ? "MP3 (320 kbps)" : "M4A (AAC 256 kbps de alta fidelidad)";
+        QString targetFmt = (isTouch || modelName.contains("1G") || modelName.contains("2G")) ? "MP3 (320 kbps)" : "M4A (AAC 256 kbps de alta fidelidad)";
 
         auto reply = QMessageBox::question(
             this,
@@ -1076,7 +1127,7 @@ void MainWindow::handleDroppedFiles(const QStringList& filePaths) {
             for (const auto& src : incompatibleFiles) {
                 QFileInfo fi(src);
                 uint64_t fSize = fi.size();
-                QString extOut = (modelName.contains("1G") || modelName.contains("2G")) ? "mp3" : "m4a";
+                QString extOut = (isTouch || modelName.contains("1G") || modelName.contains("2G")) ? "mp3" : "m4a";
                 QString dest = QDir(tempDir).filePath(fi.completeBaseName() + "." + extOut);
 
                 progressDlg->updateProgress(incompAccumBytes, QString("Convirtiendo (%1/%2): %3...")
@@ -1117,6 +1168,16 @@ void MainWindow::handleDroppedFiles(const QStringList& filePaths) {
     QApplication::processEvents();
 
     QString fwGuid = m_currentDevice->serialNumber();
+
+    // Si hay una lista de usuario seleccionada (iPod Touch), las canciones se añaden tambien a esa lista
+    QString targetPlaylist;
+    {
+        const auto plsNow = m_currentDevice->playlists();
+        if (isTouch && m_currentPlaylistIndex > 0 && m_currentPlaylistIndex < plsNow.size() &&
+            !plsNow.at(m_currentPlaylistIndex).isMaster)
+            targetPlaylist = plsNow.at(m_currentPlaylistIndex).name;
+    }
+
     bool importOk = TrackImporter::importTracksToDevice(
         m_currentDevice->mountPath(),
         fwGuid,
@@ -1126,7 +1187,8 @@ void MainWindow::handleDroppedFiles(const QStringList& filePaths) {
             Q_UNUSED(tot);
             Q_UNUSED(totBytes);
             importDlg->updateProgress(curBytes, status);
-        }
+        },
+        targetPlaylist
     );
 
     importDlg->setComplete("¡Canciones transferidas con éxito!");
@@ -1144,7 +1206,8 @@ void MainWindow::handleDroppedFiles(const QStringList& filePaths) {
             this,
             "Transferencia completada",
             QString("¡Se agregaron %1 canciones con éxito a tu %2!\n\n"
-                    "La base de datos iTunesDB ha sido sincronizada y las canciones están listas para reproducirse.")
+                    "La base de datos iTunesDB ha sido sincronizada y las canciones están listas para reproducirse.\n\n"
+                    "En iPod Touch: reinicia el iPod (Sleep + Home hasta ver el logo) para que aparezcan en la app Música.")
                 .arg(filesToImport.size()).arg(m_currentDevice->modelName())
         );
     } else {

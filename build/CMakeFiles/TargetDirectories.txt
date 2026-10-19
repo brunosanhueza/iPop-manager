@@ -1,9 +1,0 @@
-/home/lost/iPop-manager/build/CMakeFiles/ipop.dir
-/home/lost/iPop-manager/build/CMakeFiles/edit_cache.dir
-/home/lost/iPop-manager/build/CMakeFiles/rebuild_cache.dir
-/home/lost/iPop-manager/build/CMakeFiles/list_install_components.dir
-/home/lost/iPop-manager/build/CMakeFiles/install.dir
-/home/lost/iPop-manager/build/CMakeFiles/install/local.dir
-/home/lost/iPop-manager/build/CMakeFiles/install/strip.dir
-/home/lost/iPop-manager/build/CMakeFiles/ipop_autogen_timestamp_deps.dir
-/home/lost/iPop-manager/build/CMakeFiles/ipop_autogen.dir

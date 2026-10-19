@@ -6,6 +6,9 @@
 #include <QProcessEnvironment>
 #include <QSet>
 #include <QProcess>
+#include <QStandardPaths>
+#include <QElapsedTimer>
+#include "IpodTouchBridge.h"
 
 DeviceDetector::DeviceDetector(QObject* parent)
     : QObject(parent)
@@ -61,6 +64,10 @@ QStringList DeviceDetector::detectDevices() {
         }
     }
 
+    // Montaje propio del iPod Touch (ifuse), por si QStorageInfo no lo lista
+    const QString touchMp = touchMountPoint();
+    if (isIpodMount(touchMp)) detected.insert(touchMp);
+
     return detected.values();
 }
 
@@ -92,7 +99,59 @@ QStringList DeviceDetector::detectUsbDevices() {
     return devices;
 }
 
+QString DeviceDetector::touchMountPoint() {
+    return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/mount";
+}
+
+bool DeviceDetector::mountTouchIfNeeded(QString* errorMsg) {
+    const QString mp = touchMountPoint();
+    if (isIpodMount(mp)) return true;                 // ya montado y legible
+
+    // No reintentar en cada refresco si falla (cada intento puede tardar unos segundos)
+    static QElapsedTimer lastTry;
+    static bool tried = false;
+    if (tried && lastTry.elapsed() < 5000) return false;
+    tried = true;
+    lastTry.start();
+
+    if (detectUsbDevices().isEmpty()) return false;
+
+    // Limpia un montaje roto de intentos anteriores (Input/output error)
+    QProcess::execute("fusermount", {"-uz", mp});
+    QDir().mkpath(mp);
+
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    const QString tools = IpodTouchBridge::toolsDir();
+    if (!tools.isEmpty())
+        env.insert("OPENSSL_CONF", QDir(tools).filePath("openssl-legacy.cnf"));
+
+    auto run = [&](const QString& prog, const QStringList& args, int timeoutMs) {
+        QProcess p;
+        p.setProcessEnvironment(env);
+        p.start(prog, args);
+        if (!p.waitForStarted(2000) || !p.waitForFinished(timeoutMs)) {
+            p.kill();
+            p.waitForFinished(500);
+            return -1;
+        }
+        return p.exitStatus() == QProcess::NormalExit ? p.exitCode() : -1;
+    };
+
+    if (run("ifuse", {mp}, 15000) != 0) {
+        // Puede faltar el emparejado ("Confiar" en el iPod)
+        run("idevicepair", {"pair"}, 15000);
+        if (run("ifuse", {mp}, 15000) != 0) {
+            if (errorMsg)
+                *errorMsg = "No se pudo montar el iPod Touch. Desbloquealo, toca \"Confiar\" y revisa "
+                            "que usbmuxd este corriendo (sudo sv status usbmuxd).";
+            return false;
+        }
+    }
+    return isIpodMount(mp);
+}
+
 void DeviceDetector::refresh() {
+    if (detectDevices().isEmpty()) mountTouchIfNeeded();
     const QStringList mounts = detectDevices();
     emit devicesRefreshed(mounts);
     emit usbDevicesRefreshed(detectUsbDevices());

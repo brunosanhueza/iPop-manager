@@ -6,6 +6,7 @@
 class Track {
 public:
     uint32_t id{0};
+    uint64_t dbid{0};          // ID estable de libgpod (pid de SQLite) para iPod Touch
     QString title{"Desconocido"};
     QString artist{"Artista Desconocido"};
     QString album{"Álbum Desconocido"};

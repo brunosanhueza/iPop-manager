@@ -922,6 +922,7 @@ bool ITunesDBReader::parseSqliteDatabase(
         const qint64 pid = sqlite3_column_int64(stmt, 0);
         Track track;
         track.id = static_cast<uint32_t>(trackOrder.size() + 1);
+        track.dbid = static_cast<uint64_t>(pid);
 
         const QString title = textColumn(stmt, 1).trimmed();
         const QString artist = textColumn(stmt, 2).trimmed();
@@ -953,6 +954,35 @@ bool ITunesDBReader::parseSqliteDatabase(
     if (tracksByPid.isEmpty()) {
         closeDb();
         return false;
+    }
+
+    // Rutas físicas y tamaños: viven en Locations.itdb (misma carpeta .itlp)
+    {
+        const QString locPath = QFileInfo(dbPath).dir().filePath(QStringLiteral("Locations.itdb"));
+        sqlite3* ldb = nullptr;
+        if (QFile::exists(locPath) &&
+            sqlite3_open_v2(QFile::encodeName(locPath).constData(), &ldb,
+                            SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK) {
+            sqlite3_stmt* ls = nullptr;
+            if (sqlite3_prepare_v2(ldb, "SELECT item_pid, location, file_size FROM location",
+                                   -1, &ls, nullptr) == SQLITE_OK) {
+                while (sqlite3_step(ls) == SQLITE_ROW) {
+                    const qint64 ipid = sqlite3_column_int64(ls, 0);
+                    auto it = tracksByPid.find(ipid);
+                    if (it == tracksByPid.end()) continue;
+                    const auto* loc = sqlite3_column_text(ls, 1);
+                    if (!loc) continue;
+                    QString rel = QString::fromUtf8(reinterpret_cast<const char*>(loc));
+                    rel.replace('/', ':');
+                    it->filePath = QStringLiteral(":iTunes_Control:Music:") + rel;
+                    it->sizeBytes = static_cast<uint64_t>(sqlite3_column_int64(ls, 2));
+                    const int dot = rel.lastIndexOf('.');
+                    if (dot >= 0) it->fileType = rel.mid(dot + 1).toUpper();
+                }
+            }
+            if (ls) sqlite3_finalize(ls);
+        }
+        if (ldb) sqlite3_close(ldb);
     }
 
     QHash<qint64, int> playlistIndexes;
@@ -1007,6 +1037,28 @@ bool ITunesDBReader::parseSqliteDatabase(
     }
     sqlite3_finalize(stmt);
     closeDb();
+
+    // Si el iPod no se llama "iPod de Zacky", no reconocimos la maestra por nombre:
+    // la maestra es la lista que contiene TODAS las canciones (la primera que lo cumpla).
+    {
+        bool found = false;
+        for (const Playlist& p : outPlaylists)
+            if (p.isMaster) { found = true; break; }
+        if (!found) {
+            for (Playlist& p : outPlaylists) {
+                if (!p.tracks.isEmpty() && p.tracks.size() == tracksByPid.size()) {
+                    p.isMaster = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    // La app asume que la lista maestra es el indice 0: la movemos al frente
+    // (las listas vienen ordenadas por nombre y una nueva podria quedar antes).
+    for (int i = 1; i < outPlaylists.size(); ++i) {
+        if (outPlaylists[i].isMaster) { outPlaylists.move(i, 0); break; }
+    }
 
     // Si la biblioteca no tiene una lista maestra reconocible, conservamos
     // todas las canciones en una lista de biblioteca, sin duplicarlas.

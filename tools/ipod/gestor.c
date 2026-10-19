@@ -24,13 +24,43 @@ static void guardar(Itdb_iTunesDB *db) {
     printf("Base de datos escrita OK\n");
 }
 
+
+/* Tipo de archivo segun extension. NULL = formato no soportado por el iPod Touch 2G */
+static const char *tipo_por_extension(const char *file) {
+    const char *dot = strrchr(file, '.');
+    if (!dot) return NULL;
+    if (!g_ascii_strcasecmp(dot, ".mp3")) return "MPEG audio file";
+    if (!g_ascii_strcasecmp(dot, ".m4a") || !g_ascii_strcasecmp(dot, ".aac") ||
+        !g_ascii_strcasecmp(dot, ".m4b")) return "AAC audio file";
+    return NULL;
+}
+
+/* Corta una linea en campos separados por TAB (modifica la cadena). Devuelve cuantos campos hay. */
+static int separar_tabs(char *linea, char **campos, int max) {
+    int n = 0;
+    char *p = linea;
+    while (n < max) {
+        campos[n++] = p;
+        char *t = strchr(p, '\t');
+        if (!t) break;
+        *t = '\0';
+        p = t + 1;
+    }
+    return n;
+}
+
 int main(int argc, char **argv) {
     if (argc < 3) {
         fprintf(stderr,
             "Uso:\n"
             "  %s <mountpoint> list            (dbid<TAB>artista<TAB>titulo)\n"
             "  %s <mountpoint> add <archivo.mp3> [titulo] [artista] [duracion_ms]\n"
-            "  %s <mountpoint> del <dbid> [dbid ...]\n", argv[0], argv[0], argv[0]);
+            "  %s <mountpoint> addmany      (lee stdin: archivo TAB titulo TAB artista TAB dur_ms TAB album TAB genero TAB bitrate TAB anio TAB pista)\n"
+            "  %s <mountpoint> del <dbid> [dbid ...]\n"
+            "  %s <mountpoint> plnew <nombre>\n"
+            "  %s <mountpoint> plrename <nombre_actual> <nombre_nuevo>\n"
+            "  %s <mountpoint> pldel <nombre> [nombre ...]\n"
+            "  (addmany acepta un nombre de lista opcional: addmany <lista>)\n", argv[0], argv[0], argv[0], argv[0], argv[0], argv[0], argv[0]);
         return 1;
     }
     const char *mp = argv[1];
@@ -68,6 +98,116 @@ int main(int argc, char **argv) {
             return 1;
         }
         printf("Copiado a: %s\n", t->ipod_path);
+        guardar(db);
+
+    } else if (!strcmp(cmd, "addmany")) {
+        char linea[8192];
+        int ok = 0, fallos = 0;
+        Itdb_Playlist *destino = NULL;
+        if (argc >= 4 && argv[3][0]) {
+            destino = itdb_playlist_by_name(db, argv[3]);
+            if (!destino || itdb_playlist_is_mpl(destino)) {
+                fprintf(stderr, "No existe la lista '%s' (no se anadio nada)\n", argv[3]);
+                return 1;
+            }
+        }
+        while (fgets(linea, sizeof linea, stdin)) {
+            size_t len = strlen(linea);
+            while (len && (linea[len-1] == '\n' || linea[len-1] == '\r')) linea[--len] = '\0';
+            if (!len) continue;
+
+            char *c[9] = {0};
+            int nc = separar_tabs(linea, c, 9);
+            const char *file = c[0];
+            const char *ft = tipo_por_extension(file);
+            if (!ft) {
+                printf("FAIL\t%s\tformato no soportado (solo mp3/m4a/aac)\n", file);
+                fflush(stdout); fallos++;
+                continue;
+            }
+
+            gchar *base = g_path_get_basename(file);
+            Itdb_Track *t = itdb_track_new();
+            t->title  = g_strdup((nc > 1 && c[1][0]) ? c[1] : base);
+            t->artist = g_strdup((nc > 2 && c[2][0]) ? c[2] : "Desconocido");
+            t->tracklen = (nc > 3) ? atoi(c[3]) : 0;
+            if (nc > 4 && c[4][0]) t->album = g_strdup(c[4]);
+            if (nc > 5 && c[5][0]) t->genre = g_strdup(c[5]);
+            if (nc > 6 && atoi(c[6]) > 0) t->bitrate = atoi(c[6]);
+            if (nc > 7 && atoi(c[7]) > 0) t->year = atoi(c[7]);
+            if (nc > 8 && atoi(c[8]) > 0) t->track_nr = atoi(c[8]);
+            t->mediatype = ITDB_MEDIATYPE_AUDIO;
+            t->filetype = g_strdup(ft);
+            t->samplerate = 44100;
+            g_free(base);
+
+            itdb_track_add(db, t, -1);
+            itdb_playlist_add_track(itdb_playlist_mpl(db), t, -1);
+
+            GError *err = NULL;
+            if (!itdb_cp_track_to_ipod(t, file, &err)) {
+                printf("FAIL\t%s\t%s\n", file, err ? err->message : "error al copiar");
+                fflush(stdout);
+                itdb_playlist_remove_track(itdb_playlist_mpl(db), t);
+                itdb_track_remove(t);
+                fallos++;
+                continue;
+            }
+            if (destino) itdb_playlist_add_track(destino, t, -1);
+            printf("COPIED\t%s\n", file);
+            fflush(stdout);
+            ok++;
+        }
+        if (ok > 0) guardar(db);
+        printf("RESUMEN\t%d\t%d\n", ok, fallos);
+        fflush(stdout);
+        itdb_free(db);
+        return ok > 0 ? 0 : 1;
+
+    } else if (!strcmp(cmd, "plnew") && argc >= 4) {
+        if (!argv[3][0] || itdb_playlist_by_name(db, argv[3])) {
+            fprintf(stderr, "Nombre invalido o ya existe una lista llamada '%s'\n", argv[3]);
+            return 1;
+        }
+        Itdb_Playlist *pl = itdb_playlist_new(argv[3], FALSE);
+        itdb_playlist_add(db, pl, -1);
+        printf("Lista creada: %s\n", argv[3]);
+        guardar(db);
+
+    } else if (!strcmp(cmd, "plrename") && argc >= 5) {
+        Itdb_Playlist *pl = itdb_playlist_by_name(db, argv[3]);
+        if (!pl || itdb_playlist_is_mpl(pl) || itdb_playlist_is_podcasts(pl)) {
+            fprintf(stderr, "No se puede renombrar '%s' (no existe o es una lista del sistema)\n", argv[3]);
+            return 1;
+        }
+        if (!argv[4][0] || itdb_playlist_by_name(db, argv[4])) {
+            fprintf(stderr, "Nombre nuevo invalido o ya existe: '%s'\n", argv[4]);
+            return 1;
+        }
+        g_free(pl->name);
+        pl->name = g_strdup(argv[4]);
+        guardar(db);
+
+    } else if (!strcmp(cmd, "pldel") && argc >= 4) {
+        int n = argc - 3;
+        Itdb_Playlist **pls = g_new0(Itdb_Playlist *, n);
+        for (int k = 0; k < n; k++) {
+            pls[k] = itdb_playlist_by_name(db, argv[3 + k]);
+            if (!pls[k] || itdb_playlist_is_mpl(pls[k]) || itdb_playlist_is_podcasts(pls[k])) {
+                fprintf(stderr, "No se puede borrar '%s' (no existe o es una lista del sistema); no se borro nada\n", argv[3 + k]);
+                return 1;
+            }
+            for (int j = 0; j < k; j++) {
+                if (pls[j] == pls[k]) {
+                    fprintf(stderr, "Lista repetida: '%s'; no se borro nada\n", argv[3 + k]);
+                    return 1;
+                }
+            }
+        }
+        for (int k = 0; k < n; k++) {
+            printf("Borrando lista: %s\n", pls[k]->name);
+            itdb_playlist_remove(pls[k]);   /* solo la lista; las canciones quedan en la biblioteca */
+        }
         guardar(db);
 
     } else if (!strcmp(cmd, "del") && argc >= 4) {

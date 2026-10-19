@@ -2,6 +2,7 @@
 #include "AudioConverter.h"
 #include "ITunesDBReader.h"
 #include "ITunesHash58.h"
+#include "IpodTouchBridge.h"
 
 #include <QDir>
 #include <QFile>
@@ -152,9 +153,19 @@ bool TrackImporter::importTracksToDevice(
     const QString& mountPath,
     const QString& firewireGuid,
     const QList<QString>& sourceFilePaths,
-    std::function<void(int current, int total, uint64_t currentBytes, uint64_t totalBytes, const QString& status)> progressCb
+    std::function<void(int current, int total, uint64_t currentBytes, uint64_t totalBytes, const QString& status)> progressCb,
+    const QString& playlistName
 ) {
     if (sourceFilePaths.isEmpty() || mountPath.isEmpty()) return false;
+
+    // iPod Touch (iOS 4): la base es iTunesCDB + SQLite firmada; solo libgpod (gestor) la escribe bien.
+    if (IpodTouchBridge::isTouchLayout(mountPath)) {
+        QString err;
+        int added = 0;
+        const bool ok = IpodTouchBridge::addTracks(mountPath, sourceFilePaths, progressCb, &err, &added, playlistName);
+        if (!ok || !err.isEmpty()) qWarning() << "IpodTouchBridge::addTracks:" << err;
+        return ok;
+    }
 
     QDir dir(mountPath);
     QString dbPath = dir.filePath("iPod_Control/iTunes/iTunesDB");

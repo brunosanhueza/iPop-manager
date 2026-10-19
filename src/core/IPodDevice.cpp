@@ -1,4 +1,5 @@
 #include "IPodDevice.h"
+#include "IpodTouchBridge.h"
 #include "ITunesDBReader.h"
 
 #include <QDir>
@@ -140,6 +141,10 @@ void IPodDevice::parseSysInfo() {
     if (m_modelName == "iPod" && !m_generation.isEmpty()) {
         m_modelName = resolveIpodModel(m_generation);
     }
+
+    if (m_modelName == "iPod" && IpodTouchBridge::isTouchLayout(m_mountPath)) {
+        m_modelName = "iPod touch";
+    }
 }
 
 void IPodDevice::loadPlaylists() {
@@ -184,6 +189,28 @@ bool IPodDevice::deleteTracks(const QList<uint32_t>& trackIds, int playlistIndex
     uint64_t totalBytes = 0;
     for (const auto& t : uniqueTracksToDelete) {
         totalBytes += t.sizeBytes;
+    }
+
+    // iPod Touch (iOS 4): borrar por dbid con libgpod (gestor). Borra cancion + mp3 y escribe la base una vez.
+    if (IpodTouchBridge::isTouchLayout(m_mountPath)) {
+        if (!m_playlists.at(playlistIndex).isMaster) {
+            if (progressCb) progressCb(0, totalBytes, "En iPod Touch solo se puede eliminar desde la biblioteca completa.");
+            return false;
+        }
+        QList<uint64_t> dbids;
+        for (const auto& t : uniqueTracksToDelete) dbids.append(t.dbid);
+        if (progressCb) progressCb(0, totalBytes, QString("Eliminando %1 canciones y actualizando la base de datos...").arg(dbids.size()));
+        QString err;
+        const bool ok = IpodTouchBridge::deleteTracks(m_mountPath, dbids, &err);
+        if (!ok) {
+            qWarning() << "IpodTouchBridge::deleteTracks:" << err;
+            if (progressCb) progressCb(0, totalBytes, "Error: " + err);
+            return false;
+        }
+        loadPlaylists();
+        refreshStorageBreakdown();
+        if (progressCb) progressCb(totalBytes, totalBytes, "¡Operación completada con éxito!");
+        return true;
     }
 
     if (progressCb) {
@@ -246,6 +273,18 @@ bool IPodDevice::deleteTracks(const QList<uint32_t>& trackIds, int playlistIndex
 
 bool IPodDevice::deletePlaylists(const QList<int>& playlistIndices, QString* errorMsg) {
     if (!m_isValid || playlistIndices.isEmpty()) return false;
+
+    if (IpodTouchBridge::isTouchLayout(m_mountPath)) {
+        QStringList names;
+        for (int idx : playlistIndices) {
+            if (idx < 0 || idx >= m_playlists.size() || m_playlists.at(idx).isMaster) continue;
+            names << m_playlists.at(idx).name;
+        }
+        if (names.isEmpty()) return false;
+        const bool ok = IpodTouchBridge::deletePlaylists(m_mountPath, names, errorMsg);
+        if (ok) loadPlaylists();
+        return ok;
+    }
     QDir dir(m_mountPath);
     QString dbPath = dir.filePath("iPod_Control/iTunes/iTunesDB");
     if (!QFile::exists(dbPath)) dbPath = dir.filePath("ipod_control/itunes/itunesdb");
@@ -262,6 +301,14 @@ bool IPodDevice::deletePlaylists(const QList<int>& playlistIndices, QString* err
 
 bool IPodDevice::renamePlaylist(int playlistIndex, const QString& newName, QString* errorMsg) {
     if (!m_isValid || playlistIndex <= 0) return false;
+
+    if (IpodTouchBridge::isTouchLayout(m_mountPath)) {
+        if (playlistIndex >= m_playlists.size() || m_playlists.at(playlistIndex).isMaster) return false;
+        const bool ok = IpodTouchBridge::renamePlaylist(m_mountPath, m_playlists.at(playlistIndex).name,
+                                                        newName, errorMsg);
+        if (ok) loadPlaylists();
+        return ok;
+    }
     QDir dir(m_mountPath);
     QString dbPath = dir.filePath("iPod_Control/iTunes/iTunesDB");
     if (!QFile::exists(dbPath)) dbPath = dir.filePath("ipod_control/itunes/itunesdb");
@@ -277,6 +324,12 @@ bool IPodDevice::renamePlaylist(int playlistIndex, const QString& newName, QStri
 
 bool IPodDevice::createPlaylist(const QString& name, QString* errorMsg) {
     if (!m_isValid || name.trimmed().isEmpty()) return false;
+
+    if (IpodTouchBridge::isTouchLayout(m_mountPath)) {
+        const bool ok = IpodTouchBridge::createPlaylist(m_mountPath, name.trimmed(), errorMsg);
+        if (ok) loadPlaylists();
+        return ok;
+    }
     QDir dir(m_mountPath);
     QString dbPath = dir.filePath("iPod_Control/iTunes/iTunesDB");
     if (!QFile::exists(dbPath)) dbPath = dir.filePath("ipod_control/itunes/itunesdb");
@@ -578,6 +631,14 @@ bool IPodDevice::eject(QString* errorMsg) {
     m_isValid = false;
     return true;
 #else
+    if (IpodTouchBridge::isTouchLayout(m_mountPath)) {
+        // Montaje FUSE de ifuse: no es un disco, se desmonta con fusermount
+        if (IpodTouchBridge::unmount(m_mountPath, errorMsg)) {
+            m_isValid = false;
+            return true;
+        }
+        return false;
+    }
     QProcess::execute("sync");
     int exitCode = QProcess::execute("eject", {m_mountPath});
     if (exitCode != 0) {

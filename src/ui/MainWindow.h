@@ -29,6 +29,7 @@ private slots:
     void onBrowseCustomMount();
     void onDeviceSelected(int index);
     void onEjectDevice();
+    void onAddTracks();
     void onTreeItemClicked(QTreeWidgetItem* item, int column);
     void onTreeItemChanged(QTreeWidgetItem* item, int column);
     void onTreeContextMenu(const QPoint& pos);
@@ -80,6 +81,7 @@ private:
     QPushButton* m_refreshBtn{nullptr};
     QPushButton* m_browseBtn{nullptr};
     QPushButton* m_ejectBtn{nullptr};
+    QPushButton* m_addTracksBtn{nullptr};
     QFrame* m_itunesWarningFrame{nullptr};
     ITunesPlayerWidget* m_playerWidget{nullptr};
 

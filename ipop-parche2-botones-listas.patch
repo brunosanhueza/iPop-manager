@@ -1,0 +1,448 @@
+diff -ruN a/src/core/IPodDevice.cpp b/src/core/IPodDevice.cpp
+--- a/src/core/IPodDevice.cpp	2026-10-19 02:52:48.139374741 +0000
++++ b/src/core/IPodDevice.cpp	2026-10-19 02:52:48.148037344 +0000
+@@ -273,6 +273,18 @@
+ 
+ bool IPodDevice::deletePlaylists(const QList<int>& playlistIndices, QString* errorMsg) {
+     if (!m_isValid || playlistIndices.isEmpty()) return false;
++
++    if (IpodTouchBridge::isTouchLayout(m_mountPath)) {
++        QStringList names;
++        for (int idx : playlistIndices) {
++            if (idx < 0 || idx >= m_playlists.size() || m_playlists.at(idx).isMaster) continue;
++            names << m_playlists.at(idx).name;
++        }
++        if (names.isEmpty()) return false;
++        const bool ok = IpodTouchBridge::deletePlaylists(m_mountPath, names, errorMsg);
++        if (ok) loadPlaylists();
++        return ok;
++    }
+     QDir dir(m_mountPath);
+     QString dbPath = dir.filePath("iPod_Control/iTunes/iTunesDB");
+     if (!QFile::exists(dbPath)) dbPath = dir.filePath("ipod_control/itunes/itunesdb");
+@@ -289,6 +301,14 @@
+ 
+ bool IPodDevice::renamePlaylist(int playlistIndex, const QString& newName, QString* errorMsg) {
+     if (!m_isValid || playlistIndex <= 0) return false;
++
++    if (IpodTouchBridge::isTouchLayout(m_mountPath)) {
++        if (playlistIndex >= m_playlists.size() || m_playlists.at(playlistIndex).isMaster) return false;
++        const bool ok = IpodTouchBridge::renamePlaylist(m_mountPath, m_playlists.at(playlistIndex).name,
++                                                        newName, errorMsg);
++        if (ok) loadPlaylists();
++        return ok;
++    }
+     QDir dir(m_mountPath);
+     QString dbPath = dir.filePath("iPod_Control/iTunes/iTunesDB");
+     if (!QFile::exists(dbPath)) dbPath = dir.filePath("ipod_control/itunes/itunesdb");
+@@ -304,6 +324,12 @@
+ 
+ bool IPodDevice::createPlaylist(const QString& name, QString* errorMsg) {
+     if (!m_isValid || name.trimmed().isEmpty()) return false;
++
++    if (IpodTouchBridge::isTouchLayout(m_mountPath)) {
++        const bool ok = IpodTouchBridge::createPlaylist(m_mountPath, name.trimmed(), errorMsg);
++        if (ok) loadPlaylists();
++        return ok;
++    }
+     QDir dir(m_mountPath);
+     QString dbPath = dir.filePath("iPod_Control/iTunes/iTunesDB");
+     if (!QFile::exists(dbPath)) dbPath = dir.filePath("ipod_control/itunes/itunesdb");
+diff -ruN a/src/core/ITunesDBReader.cpp b/src/core/ITunesDBReader.cpp
+--- a/src/core/ITunesDBReader.cpp	2026-10-19 02:52:48.138631500 +0000
++++ b/src/core/ITunesDBReader.cpp	2026-10-19 02:52:48.148321152 +0000
+@@ -1038,6 +1038,12 @@
+     sqlite3_finalize(stmt);
+     closeDb();
+ 
++    // La app asume que la lista maestra es el indice 0: la movemos al frente
++    // (las listas vienen ordenadas por nombre y una nueva podria quedar antes).
++    for (int i = 1; i < outPlaylists.size(); ++i) {
++        if (outPlaylists[i].isMaster) { outPlaylists.move(i, 0); break; }
++    }
++
+     // Si la biblioteca no tiene una lista maestra reconocible, conservamos
+     // todas las canciones en una lista de biblioteca, sin duplicarlas.
+     bool hasMaster = false;
+diff -ruN a/src/core/IpodTouchBridge.cpp b/src/core/IpodTouchBridge.cpp
+--- a/src/core/IpodTouchBridge.cpp	2026-10-19 02:52:48.139091668 +0000
++++ b/src/core/IpodTouchBridge.cpp	2026-10-19 02:52:48.148626241 +0000
+@@ -71,7 +71,8 @@
+ }
+ 
+ bool IpodTouchBridge::addTracks(const QString& mountPath, const QList<QString>& sourceFiles,
+-                                ProgressCb progressCb, QString* errorMsg, int* addedCount)
++                                ProgressCb progressCb, QString* errorMsg, int* addedCount,
++                                const QString& playlistName)
+ {
+     if (addedCount) *addedCount = 0;
+     if (sourceFiles.isEmpty()) return false;
+@@ -99,7 +100,9 @@
+     QProcess proc;
+     proc.setProcessEnvironment(gestorEnv(tools));
+     proc.setProcessChannelMode(QProcess::MergedChannels);
+-    proc.start(QDir(tools).filePath("gestor"), {mountPath, "addmany"});
++    QStringList addArgs{mountPath, "addmany"};
++    if (!playlistName.isEmpty()) addArgs << playlistName;
++    proc.start(QDir(tools).filePath("gestor"), addArgs);
+     if (!proc.waitForStarted(5000)) {
+         if (errorMsg) *errorMsg = "No se pudo ejecutar gestor.";
+         return false;
+@@ -196,6 +199,52 @@
+     return ok;
+ }
+ 
++// Ejecuta un comando de escritura de gestor y comprueba que la base se haya escrito
++static bool runGestorWrite(const QString& mountPath, const QStringList& cmdArgs, QString* errorMsg) {
++    QString why;
++    if (!IpodTouchBridge::toolsAvailable(&why)) { if (errorMsg) *errorMsg = why; return false; }
++    const QString tools = IpodTouchBridge::toolsDir();
++
++    QProcess proc;
++    proc.setProcessEnvironment(gestorEnv(tools));
++    proc.setProcessChannelMode(QProcess::MergedChannels);
++    proc.start(QDir(tools).filePath("gestor"), QStringList{mountPath} + cmdArgs);
++    if (!proc.waitForStarted(5000)) {
++        if (errorMsg) *errorMsg = "No se pudo ejecutar gestor.";
++        return false;
++    }
++    QElapsedTimer limit; limit.start();
++    while (!proc.waitForFinished(100)) {
++        QCoreApplication::processEvents();
++        if (limit.elapsed() > 10 * 60 * 1000) { proc.kill(); break; }
++    }
++    const QString out = QString::fromUtf8(proc.readAll());
++    const bool ok = proc.exitStatus() == QProcess::NormalExit && proc.exitCode() == 0 &&
++                    out.contains("escrita OK");
++    if (!ok && errorMsg) {
++        QString detail;
++        for (const QString& l : out.split('\n'))
++            if (l.contains("No ") || l.contains("ya existe") || l.contains("invalido") ||
++                l.contains("Error") || l.contains("repetida")) detail += l + "\n";
++        *errorMsg = detail.isEmpty() ? "gestor no pudo escribir la base de datos del iPod." : detail.trimmed();
++    }
++    return ok;
++}
++
++bool IpodTouchBridge::createPlaylist(const QString& mountPath, const QString& name, QString* errorMsg) {
++    return runGestorWrite(mountPath, {"plnew", name}, errorMsg);
++}
++
++bool IpodTouchBridge::renamePlaylist(const QString& mountPath, const QString& oldName,
++                                     const QString& newName, QString* errorMsg) {
++    return runGestorWrite(mountPath, {"plrename", oldName, newName}, errorMsg);
++}
++
++bool IpodTouchBridge::deletePlaylists(const QString& mountPath, const QStringList& names, QString* errorMsg) {
++    if (names.isEmpty()) return false;
++    return runGestorWrite(mountPath, QStringList{"pldel"} + names, errorMsg);
++}
++
+ bool IpodTouchBridge::unmount(const QString& mountPath, QString* errorMsg) {
+     QProcess::execute("sync");
+     for (const QString& tool : {QString("fusermount"), QString("fusermount3")}) {
+diff -ruN a/src/core/IpodTouchBridge.h b/src/core/IpodTouchBridge.h
+--- a/src/core/IpodTouchBridge.h	2026-10-19 02:52:48.139878494 +0000
++++ b/src/core/IpodTouchBridge.h	2026-10-19 02:52:48.148600810 +0000
+@@ -24,13 +24,19 @@
+                           const QList<QString>& sourceFiles,
+                           ProgressCb progressCb = nullptr,
+                           QString* errorMsg = nullptr,
+-                          int* addedCount = nullptr);
++                          int* addedCount = nullptr,
++                          const QString& playlistName = QString());
+ 
+     // Borra por dbid (cancion + archivo mp3) en una sola escritura. Todo o nada si un id no existe.
+     static bool deleteTracks(const QString& mountPath,
+                              const QList<uint64_t>& dbids,
+                              QString* errorMsg = nullptr);
+ 
++    // Listas de reproduccion (se identifican por nombre; la lista maestra no se puede tocar)
++    static bool createPlaylist(const QString& mountPath, const QString& name, QString* errorMsg = nullptr);
++    static bool renamePlaylist(const QString& mountPath, const QString& oldName, const QString& newName, QString* errorMsg = nullptr);
++    static bool deletePlaylists(const QString& mountPath, const QStringList& names, QString* errorMsg = nullptr);
++
+     // Desmonta un montaje FUSE de ifuse (sync + fusermount -u)
+     static bool unmount(const QString& mountPath, QString* errorMsg = nullptr);
+ 
+diff -ruN a/src/core/TrackImporter.cpp b/src/core/TrackImporter.cpp
+--- a/src/core/TrackImporter.cpp	2026-10-19 02:52:48.138892904 +0000
++++ b/src/core/TrackImporter.cpp	2026-10-19 02:52:48.148240476 +0000
+@@ -153,7 +153,8 @@
+     const QString& mountPath,
+     const QString& firewireGuid,
+     const QList<QString>& sourceFilePaths,
+-    std::function<void(int current, int total, uint64_t currentBytes, uint64_t totalBytes, const QString& status)> progressCb
++    std::function<void(int current, int total, uint64_t currentBytes, uint64_t totalBytes, const QString& status)> progressCb,
++    const QString& playlistName
+ ) {
+     if (sourceFilePaths.isEmpty() || mountPath.isEmpty()) return false;
+ 
+@@ -161,7 +162,7 @@
+     if (IpodTouchBridge::isTouchLayout(mountPath)) {
+         QString err;
+         int added = 0;
+-        const bool ok = IpodTouchBridge::addTracks(mountPath, sourceFilePaths, progressCb, &err, &added);
++        const bool ok = IpodTouchBridge::addTracks(mountPath, sourceFilePaths, progressCb, &err, &added, playlistName);
+         if (!ok || !err.isEmpty()) qWarning() << "IpodTouchBridge::addTracks:" << err;
+         return ok;
+     }
+diff -ruN a/src/core/TrackImporter.h b/src/core/TrackImporter.h
+--- a/src/core/TrackImporter.h	2026-10-19 02:52:48.139661035 +0000
++++ b/src/core/TrackImporter.h	2026-10-19 02:52:48.148547757 +0000
+@@ -11,7 +11,8 @@
+         const QString& mountPath,
+         const QString& firewireGuid,
+         const QList<QString>& sourceFilePaths,
+-        std::function<void(int current, int total, uint64_t currentBytes, uint64_t totalBytes, const QString& status)> progressCb = nullptr
++        std::function<void(int current, int total, uint64_t currentBytes, uint64_t totalBytes, const QString& status)> progressCb = nullptr,
++        const QString& playlistName = QString()
+     );
+ 
+ private:
+diff -ruN a/src/ui/MainWindow.cpp b/src/ui/MainWindow.cpp
+--- a/src/ui/MainWindow.cpp	2026-10-19 02:52:48.140282284 +0000
++++ b/src/ui/MainWindow.cpp	2026-10-19 02:52:48.149414040 +0000
+@@ -5,6 +5,7 @@
+ #include <QGridLayout>
+ #include <QGroupBox>
+ #include <QFileDialog>
++#include "core/IpodTouchBridge.h"
+ #include <QMessageBox>
+ #include <QInputDialog>
+ #include <QMenu>
+@@ -182,6 +183,21 @@
+     connect(m_browseBtn, &QPushButton::clicked, this, &MainWindow::onBrowseCustomMount);
+     rightControls->addWidget(m_browseBtn);
+ 
++    m_addTracksBtn = new QPushButton("➕ Añadir canciones", this);
++    m_addTracksBtn->setToolTip("Elegir archivos de música (.mp3, .m4a...) para copiarlos al iPod. También puedes arrastrarlos a la ventana.");
++    m_addTracksBtn->setStyleSheet(
++        "QPushButton { "
++        "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #FDFDFD, stop:0.5 #EDEDED, stop:0.51 #E0E0E0, stop:1 #D0D0D0); "
++        "  border: 1px solid #8E949C; border-radius: 4px; padding: 4px 10px; font-size: 11px; font-weight: 600; color: #2E3338; "
++        "} "
++        "QPushButton:hover { background: #FFFFFF; border-color: #6A7078; } "
++        "QPushButton:pressed { background: #B5BAC0; } "
++        "QPushButton:disabled { background: #E2E5E8; color: #989EA6; border-color: #CCD0D6; }"
++    );
++    m_addTracksBtn->setEnabled(false);
++    connect(m_addTracksBtn, &QPushButton::clicked, this, &MainWindow::onAddTracks);
++    rightControls->addWidget(m_addTracksBtn);
++
+     m_ejectBtn = new QPushButton("⏏ Expulsar", this);
+     m_ejectBtn->setToolTip("Expulsar iPod con seguridad");
+     m_ejectBtn->setStyleSheet(
+@@ -751,12 +767,14 @@
+         m_totalCapacityLabel->setText("Total: —");
+         m_freeCapacityLabel->setText("Libre: —");
+         m_ejectBtn->setEnabled(false);
++        if (m_addTracksBtn) m_addTracksBtn->setEnabled(false);
+         m_treeOrganizer->clear();
+         m_trackModel->setTracks({});
+         return;
+     }
+ 
+     m_ejectBtn->setEnabled(true);
++    if (m_addTracksBtn) m_addTracksBtn->setEnabled(true);
+     m_modelLabel->setText(m_currentDevice->modelName());
+     m_serialLabel->setText(m_currentDevice->serialNumber().isEmpty() ? "" : QString("SN: %1").arg(m_currentDevice->serialNumber()));
+ 
+@@ -958,6 +976,20 @@
+     m_trackTable->selectRow(prevIdx);
+ }
+ 
++void MainWindow::onAddTracks() {
++    if (!m_currentDevice || !m_currentDevice->isValid()) {
++        QMessageBox::information(this, "Aviso", "Conecta o selecciona un iPod primero.");
++        return;
++    }
++    const QStringList files = QFileDialog::getOpenFileNames(
++        this,
++        "Elegir canciones para añadir al iPod",
++        QDir::homePath(),
++        "Audio (*.mp3 *.m4a *.aac *.m4b *.wav *.aif *.aiff *.flac *.ogg *.oga *.opus *.wma);;Todos los archivos (*)"
++    );
++    if (!files.isEmpty()) handleDroppedFiles(files);
++}
++
+ void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
+     if (event->mimeData()->hasUrls()) {
+         event->acceptProposedAction();
+@@ -1037,12 +1069,20 @@
+     }
+ 
+     QString modelName = m_currentDevice->modelName();
++    const bool isTouch = IpodTouchBridge::isTouchLayout(m_currentDevice->mountPath());
+     QStringList compatibleFiles;
+     QStringList incompatibleFiles;
+     QStringList incompatibleReasons;
+ 
+     for (const auto& f : audioFiles) {
+         auto check = AudioConverter::checkCompatibility(f, modelName);
++        if (isTouch) {
++            // En iPod Touch solo se cargan directo mp3/m4a/aac; lo demas se convierte a MP3
++            const QString ext = QFileInfo(f).suffix().toLower();
++            check.isSupported = (ext == "mp3" || ext == "m4a" || ext == "aac");
++            if (!check.isSupported)
++                check.reason = QString("El formato %1 no se puede cargar directamente; se convertirá a MP3.").arg(ext.toUpper());
++        }
+         if (check.isSupported) {
+             compatibleFiles.append(f);
+         } else {
+@@ -1059,7 +1099,7 @@
+             details += QString("\n... y %1 archivos adicionales.").arg(incompatibleReasons.size() - 6);
+         }
+ 
+-        QString targetFmt = (modelName.contains("1G") || modelName.contains("2G")) ? "MP3 (320 kbps)" : "M4A (AAC 256 kbps de alta fidelidad)";
++        QString targetFmt = (isTouch || modelName.contains("1G") || modelName.contains("2G")) ? "MP3 (320 kbps)" : "M4A (AAC 256 kbps de alta fidelidad)";
+ 
+         auto reply = QMessageBox::question(
+             this,
+@@ -1087,7 +1127,7 @@
+             for (const auto& src : incompatibleFiles) {
+                 QFileInfo fi(src);
+                 uint64_t fSize = fi.size();
+-                QString extOut = (modelName.contains("1G") || modelName.contains("2G")) ? "mp3" : "m4a";
++                QString extOut = (isTouch || modelName.contains("1G") || modelName.contains("2G")) ? "mp3" : "m4a";
+                 QString dest = QDir(tempDir).filePath(fi.completeBaseName() + "." + extOut);
+ 
+                 progressDlg->updateProgress(incompAccumBytes, QString("Convirtiendo (%1/%2): %3...")
+@@ -1128,6 +1168,16 @@
+     QApplication::processEvents();
+ 
+     QString fwGuid = m_currentDevice->serialNumber();
++
++    // Si hay una lista de usuario seleccionada (iPod Touch), las canciones se añaden tambien a esa lista
++    QString targetPlaylist;
++    {
++        const auto plsNow = m_currentDevice->playlists();
++        if (isTouch && m_currentPlaylistIndex > 0 && m_currentPlaylistIndex < plsNow.size() &&
++            !plsNow.at(m_currentPlaylistIndex).isMaster)
++            targetPlaylist = plsNow.at(m_currentPlaylistIndex).name;
++    }
++
+     bool importOk = TrackImporter::importTracksToDevice(
+         m_currentDevice->mountPath(),
+         fwGuid,
+@@ -1137,7 +1187,8 @@
+             Q_UNUSED(tot);
+             Q_UNUSED(totBytes);
+             importDlg->updateProgress(curBytes, status);
+-        }
++        },
++        targetPlaylist
+     );
+ 
+     importDlg->setComplete("¡Canciones transferidas con éxito!");
+diff -ruN a/src/ui/MainWindow.h b/src/ui/MainWindow.h
+--- a/src/ui/MainWindow.h	2026-10-19 02:52:48.141116290 +0000
++++ b/src/ui/MainWindow.h	2026-10-19 02:52:48.149484377 +0000
+@@ -29,6 +29,7 @@
+     void onBrowseCustomMount();
+     void onDeviceSelected(int index);
+     void onEjectDevice();
++    void onAddTracks();
+     void onTreeItemClicked(QTreeWidgetItem* item, int column);
+     void onTreeItemChanged(QTreeWidgetItem* item, int column);
+     void onTreeContextMenu(const QPoint& pos);
+@@ -80,6 +81,7 @@
+     QPushButton* m_refreshBtn{nullptr};
+     QPushButton* m_browseBtn{nullptr};
+     QPushButton* m_ejectBtn{nullptr};
++    QPushButton* m_addTracksBtn{nullptr};
+     QFrame* m_itunesWarningFrame{nullptr};
+     ITunesPlayerWidget* m_playerWidget{nullptr};
+ 
+diff -ruN a/tools/ipod/gestor.c b/tools/ipod/gestor.c
+--- a/tools/ipod/gestor.c	2026-10-19 02:52:48.141615049 +0000
++++ b/tools/ipod/gestor.c	2026-10-19 02:52:48.151097336 +0000
+@@ -56,7 +56,11 @@
+             "  %s <mountpoint> list            (dbid<TAB>artista<TAB>titulo)\n"
+             "  %s <mountpoint> add <archivo.mp3> [titulo] [artista] [duracion_ms]\n"
+             "  %s <mountpoint> addmany      (lee stdin: archivo TAB titulo TAB artista TAB dur_ms TAB album TAB genero TAB bitrate TAB anio TAB pista)\n"
+-            "  %s <mountpoint> del <dbid> [dbid ...]\n", argv[0], argv[0], argv[0], argv[0]);
++            "  %s <mountpoint> del <dbid> [dbid ...]\n"
++            "  %s <mountpoint> plnew <nombre>\n"
++            "  %s <mountpoint> plrename <nombre_actual> <nombre_nuevo>\n"
++            "  %s <mountpoint> pldel <nombre> [nombre ...]\n"
++            "  (addmany acepta un nombre de lista opcional: addmany <lista>)\n", argv[0], argv[0], argv[0], argv[0], argv[0], argv[0], argv[0]);
+         return 1;
+     }
+     const char *mp = argv[1];
+@@ -99,6 +103,14 @@
+     } else if (!strcmp(cmd, "addmany")) {
+         char linea[8192];
+         int ok = 0, fallos = 0;
++        Itdb_Playlist *destino = NULL;
++        if (argc >= 4 && argv[3][0]) {
++            destino = itdb_playlist_by_name(db, argv[3]);
++            if (!destino || itdb_playlist_is_mpl(destino)) {
++                fprintf(stderr, "No existe la lista '%s' (no se anadio nada)\n", argv[3]);
++                return 1;
++            }
++        }
+         while (fgets(linea, sizeof linea, stdin)) {
+             size_t len = strlen(linea);
+             while (len && (linea[len-1] == '\n' || linea[len-1] == '\r')) linea[--len] = '\0';
+@@ -141,6 +153,7 @@
+                 fallos++;
+                 continue;
+             }
++            if (destino) itdb_playlist_add_track(destino, t, -1);
+             printf("COPIED\t%s\n", file);
+             fflush(stdout);
+             ok++;
+@@ -151,6 +164,52 @@
+         itdb_free(db);
+         return ok > 0 ? 0 : 1;
+ 
++    } else if (!strcmp(cmd, "plnew") && argc >= 4) {
++        if (!argv[3][0] || itdb_playlist_by_name(db, argv[3])) {
++            fprintf(stderr, "Nombre invalido o ya existe una lista llamada '%s'\n", argv[3]);
++            return 1;
++        }
++        Itdb_Playlist *pl = itdb_playlist_new(argv[3], FALSE);
++        itdb_playlist_add(db, pl, -1);
++        printf("Lista creada: %s\n", argv[3]);
++        guardar(db);
++
++    } else if (!strcmp(cmd, "plrename") && argc >= 5) {
++        Itdb_Playlist *pl = itdb_playlist_by_name(db, argv[3]);
++        if (!pl || itdb_playlist_is_mpl(pl) || itdb_playlist_is_podcasts(pl)) {
++            fprintf(stderr, "No se puede renombrar '%s' (no existe o es una lista del sistema)\n", argv[3]);
++            return 1;
++        }
++        if (!argv[4][0] || itdb_playlist_by_name(db, argv[4])) {
++            fprintf(stderr, "Nombre nuevo invalido o ya existe: '%s'\n", argv[4]);
++            return 1;
++        }
++        g_free(pl->name);
++        pl->name = g_strdup(argv[4]);
++        guardar(db);
++
++    } else if (!strcmp(cmd, "pldel") && argc >= 4) {
++        int n = argc - 3;
++        Itdb_Playlist **pls = g_new0(Itdb_Playlist *, n);
++        for (int k = 0; k < n; k++) {
++            pls[k] = itdb_playlist_by_name(db, argv[3 + k]);
++            if (!pls[k] || itdb_playlist_is_mpl(pls[k]) || itdb_playlist_is_podcasts(pls[k])) {
++                fprintf(stderr, "No se puede borrar '%s' (no existe o es una lista del sistema); no se borro nada\n", argv[3 + k]);
++                return 1;
++            }
++            for (int j = 0; j < k; j++) {
++                if (pls[j] == pls[k]) {
++                    fprintf(stderr, "Lista repetida: '%s'; no se borro nada\n", argv[3 + k]);
++                    return 1;
++                }
++            }
++        }
++        for (int k = 0; k < n; k++) {
++            printf("Borrando lista: %s\n", pls[k]->name);
++            itdb_playlist_remove(pls[k]);   /* solo la lista; las canciones quedan en la biblioteca */
++        }
++        guardar(db);
++
+     } else if (!strcmp(cmd, "del") && argc >= 4) {
+         int n = argc - 3;
+         Itdb_Track **tr = g_new0(Itdb_Track *, n);

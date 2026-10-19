@@ -11,7 +11,8 @@ public:
         const QString& mountPath,
         const QString& firewireGuid,
         const QList<QString>& sourceFilePaths,
-        std::function<void(int current, int total, uint64_t currentBytes, uint64_t totalBytes, const QString& status)> progressCb = nullptr
+        std::function<void(int current, int total, uint64_t currentBytes, uint64_t totalBytes, const QString& status)> progressCb = nullptr,
+        const QString& playlistName = QString()
     );
 
 private:
