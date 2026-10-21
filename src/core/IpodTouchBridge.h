@@ -37,6 +37,9 @@ public:
         QString artist;
         QString album;
         int durationMs{0};
+        QString sortTitle;   // clave de orden (romaji ASCII); vacio = no cambiar
+        QString sortArtist;
+        QString sortAlbum;
     };
     static bool updateTracks(const QString& mountPath, const QList<TrackEdit>& edits,
                              QString* errorMsg = nullptr, int* updatedCount = nullptr);

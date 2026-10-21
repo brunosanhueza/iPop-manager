@@ -1,5 +1,6 @@
 #include "IpodTouchBridge.h"
 #include "AudioConverter.h"
+#include "Romanizer.h"
 
 #include <QCoreApplication>
 #include <QDebug>
@@ -151,6 +152,7 @@ bool IpodTouchBridge::addTracks(const QString& mountPath, const QList<QString>& 
 
     // ---- 3. Copia por lotes: cada lote escribe la base, asi un fallo no pierde todo ----
     const int kChunk = 40;
+    bool romajiHint = false;
     int current = 0, added = 0;
     uint64_t doneBytes = 0;
     QStringList failures;
@@ -160,15 +162,28 @@ bool IpodTouchBridge::addTracks(const QString& mountPath, const QList<QString>& 
     for (int off = 0; off < total && !aborted; off += kChunk) {
         const QList<QString> chunk = sourceFiles.mid(off, kChunk);
 
-        QByteArray input;
+        QList<Track> chunkTracks;
         for (const QString& src : chunk) {
             const QString absSrc = QFileInfo(src).absoluteFilePath();
-            const Track t = metadata.contains(absSrc) ? metadata.value(absSrc)
-                                                       : AudioConverter::extractMetadata(src);
+            chunkTracks << (metadata.contains(absSrc) ? metadata.value(absSrc)
+                                                      : AudioConverter::extractMetadata(src));
+        }
+
+        // Claves de orden en romaji para titulos/artistas/albumes con caracteres no ASCII (japones, etc.)
+        QStringList sortTexts;
+        for (const Track& t : chunkTracks) sortTexts << clean(t.title) << clean(t.artist) << clean(t.album);
+        QString romajiError;
+        const QStringList sortKeys = Romanizer::romanize(sortTexts, nullptr, &romajiError);
+        if (!romajiError.isEmpty() && !romajiHint) romajiHint = true;
+
+        QByteArray input;
+        for (int k = 0; k < chunk.size(); ++k) {
+            const Track& t = chunkTracks[k];
             input += (QStringList{
-                QFileInfo(src).absoluteFilePath(), clean(t.title), clean(t.artist), QString::number(t.durationMs),
+                QFileInfo(chunk[k]).absoluteFilePath(), clean(t.title), clean(t.artist), QString::number(t.durationMs),
                 clean(t.album), clean(t.genre), QString::number(t.bitrate),
-                QString::number(t.year), QString::number(t.trackNumber)
+                QString::number(t.year), QString::number(t.trackNumber),
+                sortKeys.value(k * 3), sortKeys.value(k * 3 + 1), sortKeys.value(k * 3 + 2)
             }.join('\t') + '\n').toUtf8();
         }
 
@@ -245,6 +260,9 @@ bool IpodTouchBridge::addTracks(const QString& mountPath, const QList<QString>& 
     if (!failures.isEmpty()) summary += "\n\nProblemas:\n" + failures.mid(0, 10).join("\n");
     if (!tail.isEmpty() && added < total) summary += "\n\nDetalle de gestor:\n" + tail.trimmed();
     if (!warning.isEmpty()) summary += "\n\n" + warning;
+    if (romajiHint)
+        summary += "\n\nNota: hay nombres en japonés y no se pudo generar su orden alfabético (romaji). "
+                   "Instala python3 y, para los kanji, pykakasi (pip install --user pykakasi).";
     s_lastMessage = summary;
     if (errorMsg) *errorMsg = failures.isEmpty() ? QString() : summary;
     qWarning().noquote() << "IpodTouchBridge::addTracks:" << summary;
@@ -263,7 +281,8 @@ bool IpodTouchBridge::updateTracks(const QString& mountPath, const QList<TrackEd
     QByteArray input;
     for (const TrackEdit& e : edits) {
         input += (QStringList{ QString::number(e.dbid), clean(e.title), clean(e.artist), clean(e.album),
-                               QString::number(e.durationMs) }.join('\t') + '\n').toUtf8();
+                               QString::number(e.durationMs),
+                               clean(e.sortTitle), clean(e.sortArtist), clean(e.sortAlbum) }.join('\t') + '\n').toUtf8();
     }
 
     QProcess proc;

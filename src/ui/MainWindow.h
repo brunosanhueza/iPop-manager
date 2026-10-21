@@ -32,6 +32,7 @@ private slots:
     void onAddTracks();
     void onEditSelectedTracks();
     void onEditArtwork();
+    void onRomanizeSortKeys();
     void onTreeItemClicked(QTreeWidgetItem* item, int column);
     void onTreeItemChanged(QTreeWidgetItem* item, int column);
     void onTreeContextMenu(const QPoint& pos);
@@ -102,6 +103,7 @@ private:
     QPushButton* m_deleteBtn{nullptr};
     QPushButton* m_editTagsBtn{nullptr};
     QPushButton* m_artBtn{nullptr};
+    QPushButton* m_sortBtn{nullptr};
     QTableView* m_trackTable{nullptr};
     TrackTableModel* m_trackModel{nullptr};
 

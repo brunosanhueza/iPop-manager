@@ -1,0 +1,851 @@
+diff -ruN '--exclude=.git' chk6/CMakeLists.txt work/CMakeLists.txt
+--- a/CMakeLists.txt	2026-10-20 23:33:41.752924053 +0000
++++ b/CMakeLists.txt	2026-10-21 04:47:25.658375561 +0000
+@@ -36,6 +36,8 @@
+     src/core/DeviceDetector.cpp
+     src/core/IpodTouchBridge.h
+     src/core/IpodTouchBridge.cpp
++    src/core/Romanizer.h
++    src/core/Romanizer.cpp
+     src/ui/CapacityBar.h
+     src/ui/CapacityBar.cpp
+     src/ui/TrackTableModel.h
+@@ -55,6 +57,7 @@
+ )
+ 
+ add_executable(ipop ${IPOP_SOURCES})
++target_compile_definitions(ipop PRIVATE IPOP_SRC_TOOLS_DIR="${CMAKE_SOURCE_DIR}/tools/ipod")
+ 
+ # --- Herramientas para iPod Touch (iOS 4): gestor (libgpod) + nochmod.so + openssl-legacy.cnf ---
+ # Requieren libgpod-dev y glib (xbps-install libgpod-devel glib-devel). En Linux solamente.
+@@ -80,6 +83,10 @@
+         COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                 ${CMAKE_SOURCE_DIR}/tools/ipod/openssl-legacy.cnf ${IPOD_TOOLS_OUT}/openssl-legacy.cnf)
+ 
++    add_custom_command(TARGET gestor POST_BUILD
++        COMMAND ${CMAKE_COMMAND} -E copy_if_different
++                ${CMAKE_SOURCE_DIR}/tools/ipod/romanizar.py ${IPOD_TOOLS_OUT}/romanizar.py)
++
+     add_dependencies(ipop gestor nochmod)
+     target_compile_definitions(ipop PRIVATE IPOP_SOURCE_TOOLS_DIR="${IPOD_TOOLS_OUT}")
+ else()
+diff -ruN '--exclude=.git' chk6/README.md work/README.md
+--- a/README.md	2026-10-20 23:33:41.765887203 +0000
++++ b/README.md	2026-10-21 04:50:57.947717349 +0000
+@@ -16,6 +16,8 @@
+ * **Eliminar canciones** de la biblioteca (borra la canción y su archivo del iPod).
+ * **Revisar título, artista y álbum antes de añadir** (ventana editable; puede sacar el artista de nombres tipo «Artista - Título»). La duración se lee de cada archivo.
+ * **✏️ Editar artista / duración** de canciones que ya están en el iPod (a mano, desde el título, o recalculando la duración).
++* **Editar álbum** (y título, si marcas una sola canción): para las marcadas o para todo el álbum.
++* **🔤 Orden ABC (romaji):** los nombres en japonés se ordenan por letra en vez de caer en «#». La app guarda una clave de orden en romaji; **los nombres que ves no cambian** (no traduce el significado, solo transcribe la pronunciación).
+ * **🖼️ Cambiar o quitar carátulas**: una imagen para las canciones marcadas (o para todo el álbum), o la imagen incrustada en cada archivo.
+ * **Crear, renombrar y eliminar listas de reproducción**, y añadir canciones nuevas directamente a la lista seleccionada.
+ * **Reproducir** las canciones del iPod desde el reproductor integrado.
+@@ -32,6 +34,7 @@
+ * Linux con **Qt 6.2+** (Core, Gui, Widgets, Multimedia), **CMake 3.16+**, GCC 9+ o Clang 10+.
+ * Para iPod Touch: **libgpod**, **glib**, **libimobiledevice**, **usbmuxd**, **ifuse** y **FFmpeg** (conversión de audio).
+ * SQLite y zlib (para leer la base de datos del iPod).
++* **python3** (opcional, para el orden alfabético de nombres japoneses) y, para convertir también los **kanji**, `pykakasi`: `pip install --user pykakasi`.
+ 
+ ### Instalar dependencias (automático)
+ 
+@@ -105,6 +108,7 @@
+ 
+ * **Eliminar es definitivo:** se borra el archivo de música del iPod, sin papelera. La app pide confirmación.
+ * Para eliminar canciones hay que estar en la **biblioteca completa**; no se puede quitar una canción de una lista sin borrarla.
++* El **orden en romaji** está probado con un iPod simulado; falta confirmar en un Touch real que el iPod agrupe por letra tras reiniciar. Sin `pykakasi` los kanji no se convierten.
+ * Las **carátulas** se pueden cambiar con el botón 🖼️, pero la app todavía **no las muestra**; se ven en la app Música del iPod tras reiniciarlo. Esta función está probada con un iPod simulado, no en un Touch real: prueba primero con una sola canción.
+ * La lista maestra se reconoce por el nombre `iPod de Zacky` o, si no existe, por ser la lista que contiene **todas** las canciones. Si tu iPod tiene un nombre distinto, esto es una heurística poco probada.
+ * Solo se cargan directamente **mp3, m4a y aac**.
+@@ -123,6 +127,7 @@
+ │   ├── gestor.c                    # CLI sobre libgpod: añadir / eliminar / listas (escribe la base firmada)
+ │   ├── nochmod.c                   # LD_PRELOAD: ifuse no implementa chmod
+ │   ├── openssl-legacy.cnf          # TLS antiguo para iOS 4
++│   ├── romanizar.py                # Japonés → romaji (clave de orden alfabético)
+ │   └── ipod.sh                     # Envoltorio de shell para pruebas manuales
+ └── src/
+     ├── main.cpp
+diff -ruN '--exclude=.git' chk6/scripts/instalar_dependencias.sh work/scripts/instalar_dependencias.sh
+--- a/scripts/instalar_dependencias.sh	2026-10-20 23:33:41.753254265 +0000
++++ b/scripts/instalar_dependencias.sh	2026-10-21 04:50:57.947263780 +0000
+@@ -7,7 +7,7 @@
+     echo ">> Void Linux detectado"
+     sudo xbps-install -Sy base-devel cmake pkg-config qt6-base-devel qt6-multimedia-devel \
+         libgpod-devel glib-devel sqlite-devel zlib-devel \
+-        libimobiledevice usbmuxd ifuse ffmpeg
++        libimobiledevice usbmuxd ifuse ffmpeg python3 python3-pip
+     # usbmuxd es un servicio runit: hay que activarlo
+     if [ ! -e /var/service/usbmuxd ]; then
+         sudo ln -s /etc/sv/usbmuxd /var/service/
+@@ -18,21 +18,28 @@
+     sudo apt-get update
+     sudo apt-get install -y build-essential cmake pkg-config qt6-base-dev qt6-multimedia-dev \
+         libgpod-dev libglib2.0-dev libsqlite3-dev zlib1g-dev \
+-        libimobiledevice-utils usbmuxd ifuse ffmpeg
++        libimobiledevice-utils usbmuxd ifuse ffmpeg python3 python3-pip
+ elif command -v pacman >/dev/null 2>&1; then
+     echo ">> Arch Linux detectado"
+     sudo pacman -S --needed base-devel cmake pkgconf qt6-base qt6-multimedia \
+-        libgpod glib2 sqlite zlib libimobiledevice usbmuxd ifuse ffmpeg
++        libgpod glib2 sqlite zlib libimobiledevice usbmuxd ifuse ffmpeg python python-pip
+ elif command -v dnf >/dev/null 2>&1; then
+     echo ">> Fedora detectado"
+     sudo dnf install -y gcc-c++ cmake pkgconf-pkg-config qt6-qtbase-devel qt6-qtmultimedia-devel \
+         libgpod-devel glib2-devel sqlite-devel zlib-devel \
+-        libimobiledevice-utils usbmuxd ifuse ffmpeg
++        libimobiledevice-utils usbmuxd ifuse ffmpeg python3 python3-pip
+ else
+     echo "No reconozco tu gestor de paquetes. Instala a mano (ver README.md, sección Dependencias)." >&2
+     exit 1
+ fi
+ 
++# pykakasi: convierte kanji a romaji para ordenar alfabeticamente los nombres en japones (opcional)
++if command -v python3 >/dev/null 2>&1; then
++    python3 -m pip install --user pykakasi 2>/dev/null \
++        || python3 -m pip install --user --break-system-packages pykakasi 2>/dev/null \
++        || echo ">> Aviso: no se pudo instalar pykakasi. Sin el, el romaji solo convierte hiragana/katakana (no kanji)."
++fi
++
+ echo
+ echo "Listo. Ahora compila con:"
+ echo "  cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j\"\$(nproc)\""
+diff -ruN '--exclude=.git' chk6/src/core/IpodTouchBridge.cpp work/src/core/IpodTouchBridge.cpp
+--- a/src/core/IpodTouchBridge.cpp	2026-10-20 23:33:41.771412879 +0000
++++ b/src/core/IpodTouchBridge.cpp	2026-10-21 04:47:44.820002503 +0000
+@@ -1,5 +1,6 @@
+ #include "IpodTouchBridge.h"
+ #include "AudioConverter.h"
++#include "Romanizer.h"
+ 
+ #include <QCoreApplication>
+ #include <QDebug>
+@@ -151,6 +152,7 @@
+ 
+     // ---- 3. Copia por lotes: cada lote escribe la base, asi un fallo no pierde todo ----
+     const int kChunk = 40;
++    bool romajiHint = false;
+     int current = 0, added = 0;
+     uint64_t doneBytes = 0;
+     QStringList failures;
+@@ -160,15 +162,28 @@
+     for (int off = 0; off < total && !aborted; off += kChunk) {
+         const QList<QString> chunk = sourceFiles.mid(off, kChunk);
+ 
+-        QByteArray input;
++        QList<Track> chunkTracks;
+         for (const QString& src : chunk) {
+             const QString absSrc = QFileInfo(src).absoluteFilePath();
+-            const Track t = metadata.contains(absSrc) ? metadata.value(absSrc)
+-                                                       : AudioConverter::extractMetadata(src);
++            chunkTracks << (metadata.contains(absSrc) ? metadata.value(absSrc)
++                                                      : AudioConverter::extractMetadata(src));
++        }
++
++        // Claves de orden en romaji para titulos/artistas/albumes con caracteres no ASCII (japones, etc.)
++        QStringList sortTexts;
++        for (const Track& t : chunkTracks) sortTexts << clean(t.title) << clean(t.artist) << clean(t.album);
++        QString romajiError;
++        const QStringList sortKeys = Romanizer::romanize(sortTexts, nullptr, &romajiError);
++        if (!romajiError.isEmpty() && !romajiHint) romajiHint = true;
++
++        QByteArray input;
++        for (int k = 0; k < chunk.size(); ++k) {
++            const Track& t = chunkTracks[k];
+             input += (QStringList{
+-                QFileInfo(src).absoluteFilePath(), clean(t.title), clean(t.artist), QString::number(t.durationMs),
++                QFileInfo(chunk[k]).absoluteFilePath(), clean(t.title), clean(t.artist), QString::number(t.durationMs),
+                 clean(t.album), clean(t.genre), QString::number(t.bitrate),
+-                QString::number(t.year), QString::number(t.trackNumber)
++                QString::number(t.year), QString::number(t.trackNumber),
++                sortKeys.value(k * 3), sortKeys.value(k * 3 + 1), sortKeys.value(k * 3 + 2)
+             }.join('\t') + '\n').toUtf8();
+         }
+ 
+@@ -245,6 +260,9 @@
+     if (!failures.isEmpty()) summary += "\n\nProblemas:\n" + failures.mid(0, 10).join("\n");
+     if (!tail.isEmpty() && added < total) summary += "\n\nDetalle de gestor:\n" + tail.trimmed();
+     if (!warning.isEmpty()) summary += "\n\n" + warning;
++    if (romajiHint)
++        summary += "\n\nNota: hay nombres en japonés y no se pudo generar su orden alfabético (romaji). "
++                   "Instala python3 y, para los kanji, pykakasi (pip install --user pykakasi).";
+     s_lastMessage = summary;
+     if (errorMsg) *errorMsg = failures.isEmpty() ? QString() : summary;
+     qWarning().noquote() << "IpodTouchBridge::addTracks:" << summary;
+@@ -263,7 +281,8 @@
+     QByteArray input;
+     for (const TrackEdit& e : edits) {
+         input += (QStringList{ QString::number(e.dbid), clean(e.title), clean(e.artist), clean(e.album),
+-                               QString::number(e.durationMs) }.join('\t') + '\n').toUtf8();
++                               QString::number(e.durationMs),
++                               clean(e.sortTitle), clean(e.sortArtist), clean(e.sortAlbum) }.join('\t') + '\n').toUtf8();
+     }
+ 
+     QProcess proc;
+diff -ruN '--exclude=.git' chk6/src/core/IpodTouchBridge.h work/src/core/IpodTouchBridge.h
+--- a/src/core/IpodTouchBridge.h	2026-10-20 23:33:41.771432430 +0000
++++ b/src/core/IpodTouchBridge.h	2026-10-21 04:47:44.819524490 +0000
+@@ -37,6 +37,9 @@
+         QString artist;
+         QString album;
+         int durationMs{0};
++        QString sortTitle;   // clave de orden (romaji ASCII); vacio = no cambiar
++        QString sortArtist;
++        QString sortAlbum;
+     };
+     static bool updateTracks(const QString& mountPath, const QList<TrackEdit>& edits,
+                              QString* errorMsg = nullptr, int* updatedCount = nullptr);
+diff -ruN '--exclude=.git' chk6/src/core/Romanizer.cpp work/src/core/Romanizer.cpp
+--- a/src/core/Romanizer.cpp	1970-01-01 00:00:00.000000000 +0000
++++ b/src/core/Romanizer.cpp	2026-10-21 04:47:25.569289468 +0000
+@@ -0,0 +1,91 @@
++#include "Romanizer.h"
++
++#include <QCoreApplication>
++#include <QDir>
++#include <QFileInfo>
++#include <QProcess>
++#include <QStandardPaths>
++
++#ifndef IPOP_SOURCE_TOOLS_DIR
++#define IPOP_SOURCE_TOOLS_DIR ""
++#endif
++#ifndef IPOP_SRC_TOOLS_DIR
++#define IPOP_SRC_TOOLS_DIR ""
++#endif
++
++bool Romanizer::needsRomanization(const QString& s) {
++    for (const QChar& c : s)
++        if (c.unicode() > 127) return true;
++    return false;
++}
++
++QString Romanizer::scriptPath() {
++    const QStringList dirs = {
++        QCoreApplication::applicationDirPath() + "/tools/ipod",
++        QCoreApplication::applicationDirPath() + "/../tools/ipod",
++        QCoreApplication::applicationDirPath(),
++        QString::fromUtf8(IPOP_SOURCE_TOOLS_DIR),
++        QString::fromUtf8(IPOP_SRC_TOOLS_DIR)
++    };
++    for (const QString& d : dirs) {
++        if (d.isEmpty()) continue;
++        const QString f = QDir(d).filePath("romanizar.py");
++        if (QFileInfo::exists(f)) return QDir(d).absoluteFilePath("romanizar.py");
++    }
++    return QString();
++}
++
++bool Romanizer::available(QString* why) {
++    if (QStandardPaths::findExecutable("python3").isEmpty()) {
++        if (why) *why = "Falta python3 para convertir el japonés a romaji.";
++        return false;
++    }
++    if (scriptPath().isEmpty()) {
++        if (why) *why = "No se encuentra tools/ipod/romanizar.py.";
++        return false;
++    }
++    return true;
++}
++
++QStringList Romanizer::romanize(const QStringList& texts, QString* engine, QString* error) {
++    QStringList result;
++    for (int i = 0; i < texts.size(); ++i) result << QString();
++
++    QStringList toSend;
++    QList<int> idx;
++    for (int i = 0; i < texts.size(); ++i) {
++        if (!needsRomanization(texts[i])) continue;
++        QString t = texts[i];
++        t.replace('\n', ' ').replace('\r', ' ');
++        toSend << t;
++        idx << i;
++    }
++    if (toSend.isEmpty()) return result;
++
++    QString why;
++    if (!available(&why)) { if (error) *error = why; return result; }
++
++    QProcess p;
++    p.start(QStandardPaths::findExecutable("python3"), {scriptPath()});
++    if (!p.waitForStarted(5000)) { if (error) *error = "No se pudo ejecutar python3."; return result; }
++    p.write((toSend.join('\n') + '\n').toUtf8());
++    p.closeWriteChannel();
++    if (!p.waitForFinished(60000)) {
++        p.kill(); p.waitForFinished(2000);
++        if (error) *error = "El convertidor de romaji tardó demasiado.";
++        return result;
++    }
++    const QStringList lines = QString::fromUtf8(p.readAllStandardOutput()).split('\n');
++    if (p.exitStatus() != QProcess::NormalExit || p.exitCode() != 0 || lines.isEmpty() ||
++        !lines.first().startsWith("#ENGINE ")) {
++        if (error) *error = "El convertidor de romaji falló: " + QString::fromUtf8(p.readAllStandardError()).left(300);
++        return result;
++    }
++    if (engine) *engine = lines.first().mid(8).trimmed();
++    if (lines.size() - 1 < toSend.size()) {
++        if (error) *error = "El convertidor de romaji devolvió menos líneas de las esperadas.";
++        return result;
++    }
++    for (int k = 0; k < idx.size(); ++k) result[idx[k]] = lines[1 + k].trimmed();
++    return result;
++}
+diff -ruN '--exclude=.git' chk6/src/core/Romanizer.h work/src/core/Romanizer.h
+--- a/src/core/Romanizer.h	1970-01-01 00:00:00.000000000 +0000
++++ b/src/core/Romanizer.h	2026-10-21 04:47:25.569256236 +0000
+@@ -0,0 +1,21 @@
++#pragma once
++
++#include <QString>
++#include <QStringList>
++
++// Convierte texto japones (kanji, hiragana, katakana) a romaji ASCII usando tools/ipod/romanizar.py
++// (requiere python3; con el modulo pykakasi tambien convierte kanji). Se usa como CLAVE DE ORDEN:
++// el iPod agrupa por letra segun sort_title/sort_artist/sort_album, y todo lo que no es ASCII cae en "#".
++class Romanizer {
++public:
++    // true si el texto tiene algun caracter no ASCII
++    static bool needsRomanization(const QString& s);
++
++    // Ruta del script, o vacio si no se encuentra
++    static QString scriptPath();
++    static bool available(QString* why = nullptr);
++
++    // Devuelve una entrada por texto: la version ASCII, o "" si no hace falta o no se pudo.
++    // engine: "pykakasi" (kanji + kana) o "kana" (solo kana; los kanji se descartan).
++    static QStringList romanize(const QStringList& texts, QString* engine = nullptr, QString* error = nullptr);
++};
+diff -ruN '--exclude=.git' chk6/src/ui/MainWindow.cpp work/src/ui/MainWindow.cpp
+--- a/src/ui/MainWindow.cpp	2026-10-20 23:33:41.771432430 +0000
++++ b/src/ui/MainWindow.cpp	2026-10-21 04:49:46.803768759 +0000
+@@ -6,6 +6,8 @@
+ #include <QGroupBox>
+ #include <QFileDialog>
+ #include "core/IpodTouchBridge.h"
++#include "core/Romanizer.h"
++#include <QHash>
+ #include <QMessageBox>
+ #include <QInputDialog>
+ #include <QMenu>
+@@ -394,6 +396,13 @@
+     connect(m_artBtn, &QPushButton::clicked, this, &MainWindow::onEditArtwork);
+     songsHeaderRow->addWidget(m_artBtn);
+ 
++    m_sortBtn = new QPushButton("🔤 Orden ABC (romaji)", this);
++    m_sortBtn->setEnabled(false);
++    m_sortBtn->setToolTip("Genera una clave de orden en romaji para los nombres en japonés, para que el iPod los ordene por letra y no los mande a «#».");
++    m_sortBtn->setStyleSheet(m_editTagsBtn->styleSheet());
++    connect(m_sortBtn, &QPushButton::clicked, this, &MainWindow::onRomanizeSortKeys);
++    songsHeaderRow->addWidget(m_sortBtn);
++
+     m_deleteBtn = new QPushButton("Eliminar seleccionadas", this);
+     m_deleteBtn->setEnabled(false);
+     m_deleteBtn->setStyleSheet(
+@@ -704,11 +713,14 @@
+             m_editTagsBtn->setEnabled(m_currentDevice && IpodTouchBridge::isTouchLayout(m_currentDevice->mountPath()));
+         if (m_artBtn)
+             m_artBtn->setEnabled(m_currentDevice && IpodTouchBridge::isTouchLayout(m_currentDevice->mountPath()));
++        if (m_sortBtn)
++            m_sortBtn->setEnabled(m_currentDevice && IpodTouchBridge::isTouchLayout(m_currentDevice->mountPath()));
+     } else {
+         m_deleteBtn->setEnabled(false);
+         m_deleteBtn->setText("Eliminar seleccionadas");
+         if (m_editTagsBtn) m_editTagsBtn->setEnabled(false);
+         if (m_artBtn) m_artBtn->setEnabled(false);
++        if (m_sortBtn) m_sortBtn->setEnabled(false);
+         m_allSelected = false;
+         m_selectAllBtn->setText("Seleccionar todas");
+     }
+@@ -1156,6 +1168,39 @@
+     QMessageBox::information(this, "Carátulas", msg);
+ }
+ 
++static bool isUnknownText(const QString& a) {
++    const QString l = a.trimmed().toLower();
++    return l.isEmpty() || l.contains("desconocido") || l.contains("unknown");
++}
++
++// Rellena las claves de orden (romaji) de cada edicion. Devuelve cuantos campos recibieron clave.
++static int addRomajiSortKeys(QList<IpodTouchBridge::TrackEdit>& edits, const QHash<uint64_t, Track>& byDbid,
++                             QString* engine, QString* err)
++{
++    auto pick = [](const QString& changed, const QString& current) {
++        const QString v = changed.isEmpty() ? current : changed;
++        return isUnknownText(v) ? QString() : v;
++    };
++    QStringList texts;
++    for (const auto& e : edits) {
++        const Track t = byDbid.value(e.dbid);
++        texts << pick(e.title, t.title) << pick(e.artist, t.artist) << pick(e.album, t.album);
++    }
++    const QStringList keys = Romanizer::romanize(texts, engine, err);
++    int n = 0;
++    for (int i = 0; i < edits.size(); ++i) {
++        if (!keys.value(i * 3).isEmpty())     { edits[i].sortTitle  = keys[i * 3];     ++n; }
++        if (!keys.value(i * 3 + 1).isEmpty()) { edits[i].sortArtist = keys[i * 3 + 1]; ++n; }
++        if (!keys.value(i * 3 + 2).isEmpty()) { edits[i].sortAlbum  = keys[i * 3 + 2]; ++n; }
++    }
++    return n;
++}
++
++static bool editHasContent(const IpodTouchBridge::TrackEdit& e) {
++    return !e.title.isEmpty() || !e.artist.isEmpty() || !e.album.isEmpty() || e.durationMs > 0 ||
++           !e.sortTitle.isEmpty() || !e.sortArtist.isEmpty() || !e.sortAlbum.isEmpty();
++}
++
+ void MainWindow::onEditSelectedTracks() {
+     if (!m_currentDevice || !IpodTouchBridge::isTouchLayout(m_currentDevice->mountPath())) {
+         QMessageBox::information(this, "Aviso", "Esta función está disponible para iPod Touch.");
+@@ -1169,75 +1214,122 @@
+         if (idSet.contains(t.id)) sel.append(t);
+     if (sel.isEmpty()) return;
+ 
+-    auto isUnknown = [](const QString& a) {
+-        const QString l = a.trimmed().toLower();
+-        return l.isEmpty() || l.contains("desconocido") || l.contains("unknown");
+-    };
++    // Si todas comparten artista / album conocido, mostrarlo como valor inicial
++    QString commonArtist = sel.first().artist, commonAlbum = sel.first().album;
++    for (const Track& t : sel) {
++        if (t.artist != commonArtist) commonArtist.clear();
++        if (t.album != commonAlbum) commonAlbum.clear();
++    }
++    if (isUnknownText(commonArtist)) commonArtist.clear();
++    if (isUnknownText(commonAlbum)) commonAlbum.clear();
+ 
+-    // Si todas comparten un artista conocido, mostrarlo como valor inicial
+-    QString commonArtist = sel.first().artist;
+-    for (const Track& t : sel) if (t.artist != commonArtist) { commonArtist.clear(); break; }
+-    if (isUnknown(commonArtist)) commonArtist.clear();
++    bool anyNonAscii = false;
++    for (const Track& t : sel)
++        if (Romanizer::needsRomanization(t.title) || Romanizer::needsRomanization(t.artist) ||
++            Romanizer::needsRomanization(t.album)) { anyNonAscii = true; break; }
++    QString romajiWhy;
++    const bool romajiOk = Romanizer::available(&romajiWhy);
+ 
+     QDialog dlg(this);
+     dlg.setWindowTitle(QString("Editar %1 canción(es)").arg(sel.size()));
+     auto* form = new QFormLayout(&dlg);
++    QLineEdit* titleEdit = nullptr;
++    if (sel.size() == 1) {
++        titleEdit = new QLineEdit(sel.first().title, &dlg);
++        form->addRow("Título:", titleEdit);
++    }
+     auto* artistEdit = new QLineEdit(commonArtist, &dlg);
+     artistEdit->setPlaceholderText("Dejar vacío para no cambiarlo");
+-    auto* albumEdit = new QLineEdit(&dlg);
++    auto* albumEdit = new QLineEdit(commonAlbum, &dlg);
+     albumEdit->setPlaceholderText("Dejar vacío para no cambiarlo");
++    auto* albumAllChk = new QCheckBox("Cambiar el álbum también en las demás canciones que tengan el mismo álbum actual", &dlg);
+     auto* autoChk = new QCheckBox("Si falta el artista, tomarlo del título («Artista - Título»)", &dlg);
+     autoChk->setChecked(true);
+     auto* durChk = new QCheckBox("Recalcular la duración leyendo cada archivo", &dlg);
+     durChk->setChecked(true);
++    auto* romajiChk = new QCheckBox("Generar orden alfabético (romaji) para nombres en japonés", &dlg);
++    romajiChk->setChecked(romajiOk && anyNonAscii);
++    romajiChk->setEnabled(romajiOk);
++    if (!romajiOk) romajiChk->setToolTip(romajiWhy);
+     auto* box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+     form->addRow("Artista:", artistEdit);
+     form->addRow("Álbum:", albumEdit);
++    form->addRow(albumAllChk);
+     form->addRow(autoChk);
+     form->addRow(durChk);
++    form->addRow(romajiChk);
+     form->addRow(box);
+     connect(box, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+     connect(box, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+     if (dlg.exec() != QDialog::Accepted) return;
+ 
++    const QString manualTitle = titleEdit ? titleEdit->text().trimmed() : QString();
+     const QString manualArtist = artistEdit->text().trimmed();
+     const QString manualAlbum = albumEdit->text().trimmed();
+ 
+-    // Calcular qué cambia en cada canción
++    // Si se cambia el album en todo el album, ampliar a las canciones que tengan el mismo album actual
++    QList<Track> work = sel;
++    if (albumAllChk->isChecked() && !manualAlbum.isEmpty()) {
++        QSet<QString> olds;
++        for (const Track& t : sel) if (!isUnknownText(t.album)) olds.insert(t.album.trimmed().toLower());
++        QSet<uint64_t> have;
++        for (const Track& t : work) have.insert(t.dbid);
++        for (const Playlist& pl : m_currentDevice->playlists()) {
++            if (!pl.isMaster) continue;
++            for (const Track& t : pl.tracks)
++                if (t.dbid && !have.contains(t.dbid) && olds.contains(t.album.trimmed().toLower())) {
++                    work.append(t); have.insert(t.dbid);
++                }
++            break;
++        }
++    }
++
++    QHash<uint64_t, Track> byDbid;
+     QList<IpodTouchBridge::TrackEdit> edits;
+-    QProgressDialog prog("Analizando canciones...", "Cancelar", 0, sel.size(), this);
++    QProgressDialog prog("Analizando canciones...", "Cancelar", 0, work.size(), this);
+     prog.setWindowModality(Qt::WindowModal);
+     prog.setMinimumDuration(400);
+     int n = 0;
+-    for (const Track& t : sel) {
++    for (const Track& t : work) {
+         prog.setValue(n++);
+         if (prog.wasCanceled()) return;
+         if (t.dbid == 0) continue;
++        byDbid.insert(t.dbid, t);
+ 
+         IpodTouchBridge::TrackEdit e;
+         e.dbid = t.dbid;
+-        bool changed = false;
+ 
++        if (!manualTitle.isEmpty() && manualTitle != t.title) e.title = manualTitle;
+         if (!manualArtist.isEmpty()) {
+-            if (t.artist != manualArtist) { e.artist = manualArtist; changed = true; }
+-        } else if (autoChk->isChecked() && isUnknown(t.artist)) {
++            if (t.artist != manualArtist) e.artist = manualArtist;
++        } else if (autoChk->isChecked() && isUnknownText(t.artist)) {
+             QString a, ti;
+-            if (AudioConverter::splitArtistTitle(t.title, a, ti)) { e.artist = a; e.title = ti; changed = true; }
++            if (AudioConverter::splitArtistTitle(t.title, a, ti)) {
++                e.artist = a;
++                if (e.title.isEmpty()) e.title = ti;
++            }
+         }
+-        if (!manualAlbum.isEmpty() && t.album != manualAlbum) { e.album = manualAlbum; changed = true; }
++        if (!manualAlbum.isEmpty() && t.album != manualAlbum) e.album = manualAlbum;
+ 
+         if (durChk->isChecked() && !t.filePath.isEmpty()) {
+             const QString phys = ITunesDBReader::resolvePhysicalPath(m_currentDevice->mountPath(), t.filePath);
+             if (QFileInfo::exists(phys)) {
+                 const int real = AudioConverter::extractMetadata(phys).durationMs;
+-                if (real > 0 && qAbs(real - t.durationMs) > 1500) { e.durationMs = real; changed = true; }
++                if (real > 0 && qAbs(real - t.durationMs) > 1500) e.durationMs = real;
+             }
+         }
+-        if (changed) edits.append(e);
++        edits.append(e);
+     }
+-    prog.setValue(sel.size());
++    prog.setValue(work.size());
+ 
+-    if (edits.isEmpty()) {
++    QString engine, romajiErr;
++    int sortFields = 0;
++    if (romajiChk->isChecked()) sortFields = addRomajiSortKeys(edits, byDbid, &engine, &romajiErr);
++
++    QList<IpodTouchBridge::TrackEdit> finalEdits;
++    for (const auto& e : edits) if (editHasContent(e)) finalEdits.append(e);
++
++    if (finalEdits.isEmpty()) {
+         QMessageBox::information(this, "Sin cambios", "No hay nada que cambiar en las canciones marcadas.");
+         return;
+     }
+@@ -1246,7 +1338,7 @@
+     QString err;
+     int updated = 0;
+     QApplication::setOverrideCursor(Qt::WaitCursor);
+-    const bool ok = IpodTouchBridge::updateTracks(m_currentDevice->mountPath(), edits, &err, &updated);
++    const bool ok = IpodTouchBridge::updateTracks(m_currentDevice->mountPath(), finalEdits, &err, &updated);
+     QApplication::restoreOverrideCursor();
+ 
+     m_currentDevice->loadPlaylists();
+@@ -1258,7 +1350,90 @@
+         QMessageBox::warning(this, "No se pudo guardar", err);
+         return;
+     }
+-    statusBar()->showMessage(QString("%1 canciones actualizadas. Reinicia el iPod (Sleep + Home) para verlas en la app Música.").arg(updated));
++    QString msg = QString("%1 canciones actualizadas. Reinicia el iPod (Sleep + Home) para verlas en la app Música.").arg(updated);
++    if (sortFields > 0) msg += QString(" Orden alfabético generado (%1).").arg(engine == "pykakasi" ? "romaji con kanji" : "solo kana");
++    statusBar()->showMessage(msg);
++    if (romajiChk->isChecked() && !romajiErr.isEmpty())
++        QMessageBox::information(this, "Orden alfabético", "No se pudo generar el romaji: " + romajiErr);
++    else if (engine == "kana")
++        QMessageBox::information(this, "Orden alfabético",
++            "Se generó el orden solo con hiragana/katakana: los kanji se omitieron.\n"
++            "Para convertir también los kanji instala pykakasi:  pip install --user pykakasi");
++}
++
++void MainWindow::onRomanizeSortKeys() {
++    if (!m_currentDevice || !IpodTouchBridge::isTouchLayout(m_currentDevice->mountPath())) {
++        QMessageBox::information(this, "Aviso", "Esta función está disponible para iPod Touch.");
++        return;
++    }
++    const QList<uint32_t> ids = m_trackModel->selectedTrackIds();
++    if (ids.isEmpty()) return;
++    const QSet<uint32_t> idSet(ids.begin(), ids.end());
++
++    QString why;
++    if (!Romanizer::available(&why)) {
++        QMessageBox::warning(this, "Orden alfabético", why);
++        return;
++    }
++
++    QHash<uint64_t, Track> byDbid;
++    QList<IpodTouchBridge::TrackEdit> edits;
++    for (const Track& t : m_activeTracks) {
++        if (!idSet.contains(t.id) || t.dbid == 0) continue;
++        byDbid.insert(t.dbid, t);
++        IpodTouchBridge::TrackEdit e;
++        e.dbid = t.dbid;
++        edits.append(e);
++    }
++    QString engine, err;
++    QApplication::setOverrideCursor(Qt::WaitCursor);
++    const int fields = addRomajiSortKeys(edits, byDbid, &engine, &err);
++    QApplication::restoreOverrideCursor();
++
++    QList<IpodTouchBridge::TrackEdit> finalEdits;
++    for (const auto& e : edits) if (editHasContent(e)) finalEdits.append(e);
++    if (fields == 0 || finalEdits.isEmpty()) {
++        QMessageBox::information(this, "Orden alfabético",
++            err.isEmpty() ? "Las canciones marcadas no tienen nombres con caracteres japoneses (u otros no latinos)."
++                          : "No se pudo generar el romaji: " + err);
++        return;
++    }
++
++    // Vista previa: original -> clave de orden
++    QStringList preview;
++    for (const auto& e : finalEdits) {
++        if (preview.size() >= 8) break;
++        const Track t = byDbid.value(e.dbid);
++        if (!e.sortTitle.isEmpty()) preview << QString("%1  →  %2").arg(t.title, e.sortTitle);
++        else if (!e.sortArtist.isEmpty()) preview << QString("%1  →  %2").arg(t.artist, e.sortArtist);
++        else if (!e.sortAlbum.isEmpty()) preview << QString("%1  →  %2").arg(t.album, e.sortAlbum);
++    }
++    QMessageBox ask(this);
++    ask.setWindowTitle("Orden alfabético (romaji)");
++    ask.setIcon(QMessageBox::Question);
++    ask.setText(QString("Se generará la clave de orden de %1 canciones. Los nombres que ves NO cambian; "
++                        "solo cambia cómo las ordena y agrupa el iPod.").arg(finalEdits.size()));
++    QString detail = "Ejemplos:\n" + preview.join("\n");
++    if (engine == "kana")
++        detail += "\n\nAviso: sin pykakasi los kanji se omiten (solo hiragana/katakana).\nInstálalo con: pip install --user pykakasi";
++    ask.setDetailedText(detail);
++    ask.setStandardButtons(QMessageBox::Ok | QMessageBox::Cancel);
++    if (ask.exec() != QMessageBox::Ok) return;
++
++    const int savedPlaylistIndex = m_currentPlaylistIndex;
++    int updated = 0;
++    QString saveErr;
++    QApplication::setOverrideCursor(Qt::WaitCursor);
++    const bool ok = IpodTouchBridge::updateTracks(m_currentDevice->mountPath(), finalEdits, &saveErr, &updated);
++    QApplication::restoreOverrideCursor();
++
++    m_currentDevice->loadPlaylists();
++    updateDeviceView();
++    populateTreeOrganizer();
++    selectPlaylistIndex(savedPlaylistIndex);
++
++    if (!ok) { QMessageBox::warning(this, "No se pudo guardar", saveErr); return; }
++    statusBar()->showMessage(QString("Orden alfabético generado en %1 canciones. Reinicia el iPod (Sleep + Home) para verlo.").arg(updated));
+ }
+ 
+ void MainWindow::onAddTracks() {
+diff -ruN '--exclude=.git' chk6/src/ui/MainWindow.h work/src/ui/MainWindow.h
+--- a/src/ui/MainWindow.h	2026-10-20 23:33:41.771461981 +0000
++++ b/src/ui/MainWindow.h	2026-10-21 04:49:46.801819715 +0000
+@@ -32,6 +32,7 @@
+     void onAddTracks();
+     void onEditSelectedTracks();
+     void onEditArtwork();
++    void onRomanizeSortKeys();
+     void onTreeItemClicked(QTreeWidgetItem* item, int column);
+     void onTreeItemChanged(QTreeWidgetItem* item, int column);
+     void onTreeContextMenu(const QPoint& pos);
+@@ -102,6 +103,7 @@
+     QPushButton* m_deleteBtn{nullptr};
+     QPushButton* m_editTagsBtn{nullptr};
+     QPushButton* m_artBtn{nullptr};
++    QPushButton* m_sortBtn{nullptr};
+     QTableView* m_trackTable{nullptr};
+     TrackTableModel* m_trackModel{nullptr};
+ 
+diff -ruN '--exclude=.git' chk6/tools/ipod/gestor.c work/tools/ipod/gestor.c
+--- a/tools/ipod/gestor.c	2026-10-20 23:33:41.771461981 +0000
++++ b/tools/ipod/gestor.c	2026-10-21 04:47:25.568449534 +0000
+@@ -57,7 +57,7 @@
+             "  %s <mountpoint> add <archivo.mp3> [titulo] [artista] [duracion_ms]\n"
+             "  %s <mountpoint> addmany      (lee stdin: archivo TAB titulo TAB artista TAB dur_ms TAB album TAB genero TAB bitrate TAB anio TAB pista)\n"
+             "  %s <mountpoint> del <dbid> [dbid ...]\n"
+-            "  %s <mountpoint> settags      (lee stdin: dbid TAB titulo TAB artista TAB album TAB dur_ms; campo vacio = no cambiar)\n"
++            "  %s <mountpoint> settags      (lee stdin: dbid TAB titulo TAB artista TAB album TAB dur_ms TAB orden_titulo TAB orden_artista TAB orden_album; vacio = no cambiar)\n"
+             "  %s <mountpoint> setart       (lee stdin: dbid TAB imagen.jpg  |  dbid TAB -  para quitar la caratula)\n"
+             "  %s <mountpoint> plnew <nombre>\n"
+             "  %s <mountpoint> plrename <nombre_actual> <nombre_nuevo>\n"
+@@ -118,8 +118,8 @@
+             while (len && (linea[len-1] == '\n' || linea[len-1] == '\r')) linea[--len] = '\0';
+             if (!len) continue;
+ 
+-            char *c[9] = {0};
+-            int nc = separar_tabs(linea, c, 9);
++            char *c[12] = {0};
++            int nc = separar_tabs(linea, c, 12);
+             const char *file = c[0];
+             const char *ft = tipo_por_extension(file);
+             if (!ft) {
+@@ -138,6 +138,9 @@
+             if (nc > 6 && atoi(c[6]) > 0) t->bitrate = atoi(c[6]);
+             if (nc > 7 && atoi(c[7]) > 0) t->year = atoi(c[7]);
+             if (nc > 8 && atoi(c[8]) > 0) t->track_nr = atoi(c[8]);
++            if (nc > 9 && c[9][0])   t->sort_title  = g_strdup(c[9]);
++            if (nc > 10 && c[10][0]) t->sort_artist = g_strdup(c[10]);
++            if (nc > 11 && c[11][0]) t->sort_album  = g_strdup(c[11]);
+             t->mediatype = ITDB_MEDIATYPE_AUDIO;
+             t->filetype = g_strdup(ft);
+             t->samplerate = 44100;
+@@ -174,8 +177,8 @@
+             while (len && (linea[len-1] == '\n' || linea[len-1] == '\r')) linea[--len] = '\0';
+             if (!len) continue;
+ 
+-            char *c[5] = {0};
+-            int nc = separar_tabs(linea, c, 5);
++            char *c[8] = {0};
++            int nc = separar_tabs(linea, c, 8);
+             guint64 id = g_ascii_strtoull(c[0], NULL, 10);
+             Itdb_Track *t = NULL;
+             if (id) {
+@@ -191,6 +194,10 @@
+             if (nc > 2 && c[2][0]) { g_free(t->artist); t->artist = g_strdup(c[2]); g_free(t->sort_artist); t->sort_artist = NULL; }
+             if (nc > 3 && c[3][0]) { g_free(t->album);  t->album  = g_strdup(c[3]); g_free(t->sort_album);  t->sort_album  = NULL; }
+             if (nc > 4 && atoi(c[4]) > 0) t->tracklen = atoi(c[4]);
++            /* Claves de orden (romaji): el iPod ordena y agrupa por letra segun estos campos */
++            if (nc > 5 && c[5][0]) { g_free(t->sort_title);  t->sort_title  = g_strdup(c[5]); }
++            if (nc > 6 && c[6][0]) { g_free(t->sort_artist); t->sort_artist = g_strdup(c[6]); }
++            if (nc > 7 && c[7][0]) { g_free(t->sort_album);  t->sort_album  = g_strdup(c[7]); }
+             printf("UPDATED\t%s\n", c[0]);
+             fflush(stdout);
+             cambiados++;
+diff -ruN '--exclude=.git' chk6/tools/ipod/romanizar.py work/tools/ipod/romanizar.py
+--- a/tools/ipod/romanizar.py	1970-01-01 00:00:00.000000000 +0000
++++ b/tools/ipod/romanizar.py	2026-10-21 04:47:02.065012618 +0000
+@@ -0,0 +1,131 @@
++#!/usr/bin/env python3
++"""Convierte texto japones a romaji ASCII para usarlo como clave de ORDEN en el iPod.
++
++Entrada : una linea de texto por linea (stdin, UTF-8).
++Salida  : primera linea "#ENGINE <motor>", y despues una linea por cada entrada.
++Motor   : "pykakasi" (kanji + kana; pip install --user pykakasi) o "kana" (solo hiragana/katakana,
++          los kanji se descartan). Con ROMANIZAR_FORCE_FALLBACK=1 se fuerza el motor "kana".
++"""
++import os
++import sys
++import unicodedata
++
++
++def is_ascii(s):
++    return all(ord(c) < 128 for c in s)
++
++
++def to_ascii(s):
++    s = unicodedata.normalize("NFKD", s)
++    s = "".join(c for c in s if ord(c) < 128)
++    return " ".join(s.split())
++
++
++# ---------------- motor "kana" (respaldo sin dependencias) ----------------
++_BASE = ("あa いi うu えe おo かka きki くku けke こko さsa しshi すsu せse そso たta ちchi つtsu てte とto "
++         "なna にni ぬnu ねne のno はha ひhi ふfu へhe ほho まma みmi むmu めme もmo やya ゆyu よyo "
++         "らra りri るru れre ろro わwa をo んn がga ぎgi ぐgu げge ごgo ざza じji ずzu ぜze ぞzo "
++         "だda ぢji づzu でde どdo ばba びbi ぶbu べbe ぼbo ぱpa ぴpi ぷpu ぺpe ぽpo ぁa ぃi ぅu ぇe ぉo "
++         "ゔvu ゐi ゑe ゎwa")
++_DIGRAPH = ("きゃkya きゅkyu きょkyo しゃsha しゅshu しょsho ちゃcha ちゅchu ちょcho にゃnya にゅnyu にょnyo "
++            "ひゃhya ひゅhyu ひょhyo みゃmya みゅmyu みょmyo りゃrya りゅryu りょryo ぎゃgya ぎゅgyu ぎょgyo "
++            "じゃja じゅju じょjo びゃbya びゅbyu びょbyo ぴゃpya ぴゅpyu ぴょpyo ふぁfa ふぃfi ふぇfe ふぉfo "
++            "てぃti でぃdi とぅtu どぅdu うぃwi うぇwe うぉwo ゔぁva ゔぃvi ゔぇve ゔぉvo しぇshe じぇje ちぇche")
++
++
++def _table(spec):
++    d = {}
++    for item in spec.split():
++        n = 2 if item[1] in "ゃゅょぁぃぅぇぉ" else 1
++        d[item[:n]] = item[n:]
++    return d
++
++
++_B = _table(_BASE)
++_D = _table(_DIGRAPH)
++
++
++def _kata_to_hira(c):
++    o = ord(c)
++    return chr(o - 0x60) if 0x30A1 <= o <= 0x30F6 else c
++
++
++def romanize_kana(text):
++    s = "".join(_kata_to_hira(c) for c in text)
++    out, i, geminate = [], 0, False
++    while i < len(s):
++        c = s[i]
++        if c == "っ":
++            geminate = True
++            i += 1
++            continue
++        if c == "ー" and out:
++            last = out[-1]
++            out.append(last[-1] if last and last[-1] in "aiueo" else "")
++            i += 1
++            continue
++        rom = None
++        if s[i:i + 2] in _D:
++            rom, step = _D[s[i:i + 2]], 2
++        elif c in _B:
++            rom, step = _B[c], 1
++        if rom is None:
++            out.append(c if ord(c) < 128 or c.isspace() else "")  # kanji y otros: se descartan
++            geminate = False
++            i += 1
++            continue
++        if geminate and rom[0] not in "aiueon":
++            rom = ("t" if rom.startswith("ch") else rom[0]) + rom
++        geminate = False
++        out.append(rom)
++        i += step
++    return to_ascii("".join(out))
++
++
++# ---------------- motor "pykakasi" ----------------
++_kks = None
++ENGINE = "kana"
++if os.environ.get("ROMANIZAR_FORCE_FALLBACK") != "1":
++    try:
++        import pykakasi
++        _kks = pykakasi.kakasi()
++        ENGINE = "pykakasi"
++    except Exception:
++        _kks = None
++
++
++def romanize_pykakasi(text):
++    out, prev_rom = [], False
++    for tok in _kks.convert(text):
++        orig = tok["orig"]
++        if is_ascii(orig):
++            out.append(orig)
++            prev_rom = False
++        else:
++            if prev_rom:
++                out.append(" ")
++            out.append(tok["hepburn"])
++            prev_rom = True
++    return to_ascii("".join(out))
++
++
++def romanize(text):
++    try:
++        return romanize_pykakasi(text) if _kks else romanize_kana(text)
++    except Exception:
++        return romanize_kana(text)
++
++
++def main():
++    sys.stdin.reconfigure(encoding="utf-8")
++    sys.stdout.reconfigure(encoding="utf-8")
++    lines = sys.stdin.read().split("\n")
++    if lines and lines[-1] == "":
++        lines.pop()
++    sys.stdout.write("#ENGINE %s\n" % ENGINE)
++    for line in lines:
++        sys.stdout.write(romanize(line) + "\n")
++
++
++if __name__ == "__main__":
++    main()

@@ -36,6 +36,8 @@ set(IPOP_SOURCES
     src/core/DeviceDetector.cpp
     src/core/IpodTouchBridge.h
     src/core/IpodTouchBridge.cpp
+    src/core/Romanizer.h
+    src/core/Romanizer.cpp
     src/ui/CapacityBar.h
     src/ui/CapacityBar.cpp
     src/ui/TrackTableModel.h
@@ -55,6 +57,7 @@ set(IPOP_SOURCES
 )
 
 add_executable(ipop ${IPOP_SOURCES})
+target_compile_definitions(ipop PRIVATE IPOP_SRC_TOOLS_DIR="${CMAKE_SOURCE_DIR}/tools/ipod")
 
 # --- Herramientas para iPod Touch (iOS 4): gestor (libgpod) + nochmod.so + openssl-legacy.cnf ---
 # Requieren libgpod-dev y glib (xbps-install libgpod-devel glib-devel). En Linux solamente.
@@ -79,6 +82,10 @@ if(GPOD_FOUND)
     add_custom_command(TARGET gestor POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 ${CMAKE_SOURCE_DIR}/tools/ipod/openssl-legacy.cnf ${IPOD_TOOLS_OUT}/openssl-legacy.cnf)
+
+    add_custom_command(TARGET gestor POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CMAKE_SOURCE_DIR}/tools/ipod/romanizar.py ${IPOD_TOOLS_OUT}/romanizar.py)
 
     add_dependencies(ipop gestor nochmod)
     target_compile_definitions(ipop PRIVATE IPOP_SOURCE_TOOLS_DIR="${IPOD_TOOLS_OUT}")

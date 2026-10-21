@@ -6,6 +6,8 @@
 #include <QGroupBox>
 #include <QFileDialog>
 #include "core/IpodTouchBridge.h"
+#include "core/Romanizer.h"
+#include <QHash>
 #include <QMessageBox>
 #include <QInputDialog>
 #include <QMenu>
@@ -394,6 +396,13 @@ void MainWindow::setupUi() {
     connect(m_artBtn, &QPushButton::clicked, this, &MainWindow::onEditArtwork);
     songsHeaderRow->addWidget(m_artBtn);
 
+    m_sortBtn = new QPushButton("🔤 Orden ABC (romaji)", this);
+    m_sortBtn->setEnabled(false);
+    m_sortBtn->setToolTip("Genera una clave de orden en romaji para los nombres en japonés, para que el iPod los ordene por letra y no los mande a «#».");
+    m_sortBtn->setStyleSheet(m_editTagsBtn->styleSheet());
+    connect(m_sortBtn, &QPushButton::clicked, this, &MainWindow::onRomanizeSortKeys);
+    songsHeaderRow->addWidget(m_sortBtn);
+
     m_deleteBtn = new QPushButton("Eliminar seleccionadas", this);
     m_deleteBtn->setEnabled(false);
     m_deleteBtn->setStyleSheet(
@@ -704,11 +713,14 @@ void MainWindow::onSelectionChanged(int selectedCount) {
             m_editTagsBtn->setEnabled(m_currentDevice && IpodTouchBridge::isTouchLayout(m_currentDevice->mountPath()));
         if (m_artBtn)
             m_artBtn->setEnabled(m_currentDevice && IpodTouchBridge::isTouchLayout(m_currentDevice->mountPath()));
+        if (m_sortBtn)
+            m_sortBtn->setEnabled(m_currentDevice && IpodTouchBridge::isTouchLayout(m_currentDevice->mountPath()));
     } else {
         m_deleteBtn->setEnabled(false);
         m_deleteBtn->setText("Eliminar seleccionadas");
         if (m_editTagsBtn) m_editTagsBtn->setEnabled(false);
         if (m_artBtn) m_artBtn->setEnabled(false);
+        if (m_sortBtn) m_sortBtn->setEnabled(false);
         m_allSelected = false;
         m_selectAllBtn->setText("Seleccionar todas");
     }
@@ -1156,6 +1168,39 @@ void MainWindow::onEditArtwork() {
     QMessageBox::information(this, "Carátulas", msg);
 }
 
+static bool isUnknownText(const QString& a) {
+    const QString l = a.trimmed().toLower();
+    return l.isEmpty() || l.contains("desconocido") || l.contains("unknown");
+}
+
+// Rellena las claves de orden (romaji) de cada edicion. Devuelve cuantos campos recibieron clave.
+static int addRomajiSortKeys(QList<IpodTouchBridge::TrackEdit>& edits, const QHash<uint64_t, Track>& byDbid,
+                             QString* engine, QString* err)
+{
+    auto pick = [](const QString& changed, const QString& current) {
+        const QString v = changed.isEmpty() ? current : changed;
+        return isUnknownText(v) ? QString() : v;
+    };
+    QStringList texts;
+    for (const auto& e : edits) {
+        const Track t = byDbid.value(e.dbid);
+        texts << pick(e.title, t.title) << pick(e.artist, t.artist) << pick(e.album, t.album);
+    }
+    const QStringList keys = Romanizer::romanize(texts, engine, err);
+    int n = 0;
+    for (int i = 0; i < edits.size(); ++i) {
+        if (!keys.value(i * 3).isEmpty())     { edits[i].sortTitle  = keys[i * 3];     ++n; }
+        if (!keys.value(i * 3 + 1).isEmpty()) { edits[i].sortArtist = keys[i * 3 + 1]; ++n; }
+        if (!keys.value(i * 3 + 2).isEmpty()) { edits[i].sortAlbum  = keys[i * 3 + 2]; ++n; }
+    }
+    return n;
+}
+
+static bool editHasContent(const IpodTouchBridge::TrackEdit& e) {
+    return !e.title.isEmpty() || !e.artist.isEmpty() || !e.album.isEmpty() || e.durationMs > 0 ||
+           !e.sortTitle.isEmpty() || !e.sortArtist.isEmpty() || !e.sortAlbum.isEmpty();
+}
+
 void MainWindow::onEditSelectedTracks() {
     if (!m_currentDevice || !IpodTouchBridge::isTouchLayout(m_currentDevice->mountPath())) {
         QMessageBox::information(this, "Aviso", "Esta función está disponible para iPod Touch.");
@@ -1169,75 +1214,122 @@ void MainWindow::onEditSelectedTracks() {
         if (idSet.contains(t.id)) sel.append(t);
     if (sel.isEmpty()) return;
 
-    auto isUnknown = [](const QString& a) {
-        const QString l = a.trimmed().toLower();
-        return l.isEmpty() || l.contains("desconocido") || l.contains("unknown");
-    };
+    // Si todas comparten artista / album conocido, mostrarlo como valor inicial
+    QString commonArtist = sel.first().artist, commonAlbum = sel.first().album;
+    for (const Track& t : sel) {
+        if (t.artist != commonArtist) commonArtist.clear();
+        if (t.album != commonAlbum) commonAlbum.clear();
+    }
+    if (isUnknownText(commonArtist)) commonArtist.clear();
+    if (isUnknownText(commonAlbum)) commonAlbum.clear();
 
-    // Si todas comparten un artista conocido, mostrarlo como valor inicial
-    QString commonArtist = sel.first().artist;
-    for (const Track& t : sel) if (t.artist != commonArtist) { commonArtist.clear(); break; }
-    if (isUnknown(commonArtist)) commonArtist.clear();
+    bool anyNonAscii = false;
+    for (const Track& t : sel)
+        if (Romanizer::needsRomanization(t.title) || Romanizer::needsRomanization(t.artist) ||
+            Romanizer::needsRomanization(t.album)) { anyNonAscii = true; break; }
+    QString romajiWhy;
+    const bool romajiOk = Romanizer::available(&romajiWhy);
 
     QDialog dlg(this);
     dlg.setWindowTitle(QString("Editar %1 canción(es)").arg(sel.size()));
     auto* form = new QFormLayout(&dlg);
+    QLineEdit* titleEdit = nullptr;
+    if (sel.size() == 1) {
+        titleEdit = new QLineEdit(sel.first().title, &dlg);
+        form->addRow("Título:", titleEdit);
+    }
     auto* artistEdit = new QLineEdit(commonArtist, &dlg);
     artistEdit->setPlaceholderText("Dejar vacío para no cambiarlo");
-    auto* albumEdit = new QLineEdit(&dlg);
+    auto* albumEdit = new QLineEdit(commonAlbum, &dlg);
     albumEdit->setPlaceholderText("Dejar vacío para no cambiarlo");
+    auto* albumAllChk = new QCheckBox("Cambiar el álbum también en las demás canciones que tengan el mismo álbum actual", &dlg);
     auto* autoChk = new QCheckBox("Si falta el artista, tomarlo del título («Artista - Título»)", &dlg);
     autoChk->setChecked(true);
     auto* durChk = new QCheckBox("Recalcular la duración leyendo cada archivo", &dlg);
     durChk->setChecked(true);
+    auto* romajiChk = new QCheckBox("Generar orden alfabético (romaji) para nombres en japonés", &dlg);
+    romajiChk->setChecked(romajiOk && anyNonAscii);
+    romajiChk->setEnabled(romajiOk);
+    if (!romajiOk) romajiChk->setToolTip(romajiWhy);
     auto* box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
     form->addRow("Artista:", artistEdit);
     form->addRow("Álbum:", albumEdit);
+    form->addRow(albumAllChk);
     form->addRow(autoChk);
     form->addRow(durChk);
+    form->addRow(romajiChk);
     form->addRow(box);
     connect(box, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
     connect(box, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
     if (dlg.exec() != QDialog::Accepted) return;
 
+    const QString manualTitle = titleEdit ? titleEdit->text().trimmed() : QString();
     const QString manualArtist = artistEdit->text().trimmed();
     const QString manualAlbum = albumEdit->text().trimmed();
 
-    // Calcular qué cambia en cada canción
+    // Si se cambia el album en todo el album, ampliar a las canciones que tengan el mismo album actual
+    QList<Track> work = sel;
+    if (albumAllChk->isChecked() && !manualAlbum.isEmpty()) {
+        QSet<QString> olds;
+        for (const Track& t : sel) if (!isUnknownText(t.album)) olds.insert(t.album.trimmed().toLower());
+        QSet<uint64_t> have;
+        for (const Track& t : work) have.insert(t.dbid);
+        for (const Playlist& pl : m_currentDevice->playlists()) {
+            if (!pl.isMaster) continue;
+            for (const Track& t : pl.tracks)
+                if (t.dbid && !have.contains(t.dbid) && olds.contains(t.album.trimmed().toLower())) {
+                    work.append(t); have.insert(t.dbid);
+                }
+            break;
+        }
+    }
+
+    QHash<uint64_t, Track> byDbid;
     QList<IpodTouchBridge::TrackEdit> edits;
-    QProgressDialog prog("Analizando canciones...", "Cancelar", 0, sel.size(), this);
+    QProgressDialog prog("Analizando canciones...", "Cancelar", 0, work.size(), this);
     prog.setWindowModality(Qt::WindowModal);
     prog.setMinimumDuration(400);
     int n = 0;
-    for (const Track& t : sel) {
+    for (const Track& t : work) {
         prog.setValue(n++);
         if (prog.wasCanceled()) return;
         if (t.dbid == 0) continue;
+        byDbid.insert(t.dbid, t);
 
         IpodTouchBridge::TrackEdit e;
         e.dbid = t.dbid;
-        bool changed = false;
 
+        if (!manualTitle.isEmpty() && manualTitle != t.title) e.title = manualTitle;
         if (!manualArtist.isEmpty()) {
-            if (t.artist != manualArtist) { e.artist = manualArtist; changed = true; }
-        } else if (autoChk->isChecked() && isUnknown(t.artist)) {
+            if (t.artist != manualArtist) e.artist = manualArtist;
+        } else if (autoChk->isChecked() && isUnknownText(t.artist)) {
             QString a, ti;
-            if (AudioConverter::splitArtistTitle(t.title, a, ti)) { e.artist = a; e.title = ti; changed = true; }
+            if (AudioConverter::splitArtistTitle(t.title, a, ti)) {
+                e.artist = a;
+                if (e.title.isEmpty()) e.title = ti;
+            }
         }
-        if (!manualAlbum.isEmpty() && t.album != manualAlbum) { e.album = manualAlbum; changed = true; }
+        if (!manualAlbum.isEmpty() && t.album != manualAlbum) e.album = manualAlbum;
 
         if (durChk->isChecked() && !t.filePath.isEmpty()) {
             const QString phys = ITunesDBReader::resolvePhysicalPath(m_currentDevice->mountPath(), t.filePath);
             if (QFileInfo::exists(phys)) {
                 const int real = AudioConverter::extractMetadata(phys).durationMs;
-                if (real > 0 && qAbs(real - t.durationMs) > 1500) { e.durationMs = real; changed = true; }
+                if (real > 0 && qAbs(real - t.durationMs) > 1500) e.durationMs = real;
             }
         }
-        if (changed) edits.append(e);
+        edits.append(e);
     }
-    prog.setValue(sel.size());
+    prog.setValue(work.size());
 
-    if (edits.isEmpty()) {
+    QString engine, romajiErr;
+    int sortFields = 0;
+    if (romajiChk->isChecked()) sortFields = addRomajiSortKeys(edits, byDbid, &engine, &romajiErr);
+
+    QList<IpodTouchBridge::TrackEdit> finalEdits;
+    for (const auto& e : edits) if (editHasContent(e)) finalEdits.append(e);
+
+    if (finalEdits.isEmpty()) {
         QMessageBox::information(this, "Sin cambios", "No hay nada que cambiar en las canciones marcadas.");
         return;
     }
@@ -1246,7 +1338,7 @@ void MainWindow::onEditSelectedTracks() {
     QString err;
     int updated = 0;
     QApplication::setOverrideCursor(Qt::WaitCursor);
-    const bool ok = IpodTouchBridge::updateTracks(m_currentDevice->mountPath(), edits, &err, &updated);
+    const bool ok = IpodTouchBridge::updateTracks(m_currentDevice->mountPath(), finalEdits, &err, &updated);
     QApplication::restoreOverrideCursor();
 
     m_currentDevice->loadPlaylists();
@@ -1258,7 +1350,90 @@ void MainWindow::onEditSelectedTracks() {
         QMessageBox::warning(this, "No se pudo guardar", err);
         return;
     }
-    statusBar()->showMessage(QString("%1 canciones actualizadas. Reinicia el iPod (Sleep + Home) para verlas en la app Música.").arg(updated));
+    QString msg = QString("%1 canciones actualizadas. Reinicia el iPod (Sleep + Home) para verlas en la app Música.").arg(updated);
+    if (sortFields > 0) msg += QString(" Orden alfabético generado (%1).").arg(engine == "pykakasi" ? "romaji con kanji" : "solo kana");
+    statusBar()->showMessage(msg);
+    if (romajiChk->isChecked() && !romajiErr.isEmpty())
+        QMessageBox::information(this, "Orden alfabético", "No se pudo generar el romaji: " + romajiErr);
+    else if (engine == "kana")
+        QMessageBox::information(this, "Orden alfabético",
+            "Se generó el orden solo con hiragana/katakana: los kanji se omitieron.\n"
+            "Para convertir también los kanji instala pykakasi:  pip install --user pykakasi");
+}
+
+void MainWindow::onRomanizeSortKeys() {
+    if (!m_currentDevice || !IpodTouchBridge::isTouchLayout(m_currentDevice->mountPath())) {
+        QMessageBox::information(this, "Aviso", "Esta función está disponible para iPod Touch.");
+        return;
+    }
+    const QList<uint32_t> ids = m_trackModel->selectedTrackIds();
+    if (ids.isEmpty()) return;
+    const QSet<uint32_t> idSet(ids.begin(), ids.end());
+
+    QString why;
+    if (!Romanizer::available(&why)) {
+        QMessageBox::warning(this, "Orden alfabético", why);
+        return;
+    }
+
+    QHash<uint64_t, Track> byDbid;
+    QList<IpodTouchBridge::TrackEdit> edits;
+    for (const Track& t : m_activeTracks) {
+        if (!idSet.contains(t.id) || t.dbid == 0) continue;
+        byDbid.insert(t.dbid, t);
+        IpodTouchBridge::TrackEdit e;
+        e.dbid = t.dbid;
+        edits.append(e);
+    }
+    QString engine, err;
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    const int fields = addRomajiSortKeys(edits, byDbid, &engine, &err);
+    QApplication::restoreOverrideCursor();
+
+    QList<IpodTouchBridge::TrackEdit> finalEdits;
+    for (const auto& e : edits) if (editHasContent(e)) finalEdits.append(e);
+    if (fields == 0 || finalEdits.isEmpty()) {
+        QMessageBox::information(this, "Orden alfabético",
+            err.isEmpty() ? "Las canciones marcadas no tienen nombres con caracteres japoneses (u otros no latinos)."
+                          : "No se pudo generar el romaji: " + err);
+        return;
+    }
+
+    // Vista previa: original -> clave de orden
+    QStringList preview;
+    for (const auto& e : finalEdits) {
+        if (preview.size() >= 8) break;
+        const Track t = byDbid.value(e.dbid);
+        if (!e.sortTitle.isEmpty()) preview << QString("%1  →  %2").arg(t.title, e.sortTitle);
+        else if (!e.sortArtist.isEmpty()) preview << QString("%1  →  %2").arg(t.artist, e.sortArtist);
+        else if (!e.sortAlbum.isEmpty()) preview << QString("%1  →  %2").arg(t.album, e.sortAlbum);
+    }
+    QMessageBox ask(this);
+    ask.setWindowTitle("Orden alfabético (romaji)");
+    ask.setIcon(QMessageBox::Question);
+    ask.setText(QString("Se generará la clave de orden de %1 canciones. Los nombres que ves NO cambian; "
+                        "solo cambia cómo las ordena y agrupa el iPod.").arg(finalEdits.size()));
+    QString detail = "Ejemplos:\n" + preview.join("\n");
+    if (engine == "kana")
+        detail += "\n\nAviso: sin pykakasi los kanji se omiten (solo hiragana/katakana).\nInstálalo con: pip install --user pykakasi";
+    ask.setDetailedText(detail);
+    ask.setStandardButtons(QMessageBox::Ok | QMessageBox::Cancel);
+    if (ask.exec() != QMessageBox::Ok) return;
+
+    const int savedPlaylistIndex = m_currentPlaylistIndex;
+    int updated = 0;
+    QString saveErr;
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    const bool ok = IpodTouchBridge::updateTracks(m_currentDevice->mountPath(), finalEdits, &saveErr, &updated);
+    QApplication::restoreOverrideCursor();
+
+    m_currentDevice->loadPlaylists();
+    updateDeviceView();
+    populateTreeOrganizer();
+    selectPlaylistIndex(savedPlaylistIndex);
+
+    if (!ok) { QMessageBox::warning(this, "No se pudo guardar", saveErr); return; }
+    statusBar()->showMessage(QString("Orden alfabético generado en %1 canciones. Reinicia el iPod (Sleep + Home) para verlo.").arg(updated));
 }
 
 void MainWindow::onAddTracks() {

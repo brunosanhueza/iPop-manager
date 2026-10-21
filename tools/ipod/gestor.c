@@ -57,7 +57,7 @@ int main(int argc, char **argv) {
             "  %s <mountpoint> add <archivo.mp3> [titulo] [artista] [duracion_ms]\n"
             "  %s <mountpoint> addmany      (lee stdin: archivo TAB titulo TAB artista TAB dur_ms TAB album TAB genero TAB bitrate TAB anio TAB pista)\n"
             "  %s <mountpoint> del <dbid> [dbid ...]\n"
-            "  %s <mountpoint> settags      (lee stdin: dbid TAB titulo TAB artista TAB album TAB dur_ms; campo vacio = no cambiar)\n"
+            "  %s <mountpoint> settags      (lee stdin: dbid TAB titulo TAB artista TAB album TAB dur_ms TAB orden_titulo TAB orden_artista TAB orden_album; vacio = no cambiar)\n"
             "  %s <mountpoint> setart       (lee stdin: dbid TAB imagen.jpg  |  dbid TAB -  para quitar la caratula)\n"
             "  %s <mountpoint> plnew <nombre>\n"
             "  %s <mountpoint> plrename <nombre_actual> <nombre_nuevo>\n"
@@ -118,8 +118,8 @@ int main(int argc, char **argv) {
             while (len && (linea[len-1] == '\n' || linea[len-1] == '\r')) linea[--len] = '\0';
             if (!len) continue;
 
-            char *c[9] = {0};
-            int nc = separar_tabs(linea, c, 9);
+            char *c[12] = {0};
+            int nc = separar_tabs(linea, c, 12);
             const char *file = c[0];
             const char *ft = tipo_por_extension(file);
             if (!ft) {
@@ -138,6 +138,9 @@ int main(int argc, char **argv) {
             if (nc > 6 && atoi(c[6]) > 0) t->bitrate = atoi(c[6]);
             if (nc > 7 && atoi(c[7]) > 0) t->year = atoi(c[7]);
             if (nc > 8 && atoi(c[8]) > 0) t->track_nr = atoi(c[8]);
+            if (nc > 9 && c[9][0])   t->sort_title  = g_strdup(c[9]);
+            if (nc > 10 && c[10][0]) t->sort_artist = g_strdup(c[10]);
+            if (nc > 11 && c[11][0]) t->sort_album  = g_strdup(c[11]);
             t->mediatype = ITDB_MEDIATYPE_AUDIO;
             t->filetype = g_strdup(ft);
             t->samplerate = 44100;
@@ -174,8 +177,8 @@ int main(int argc, char **argv) {
             while (len && (linea[len-1] == '\n' || linea[len-1] == '\r')) linea[--len] = '\0';
             if (!len) continue;
 
-            char *c[5] = {0};
-            int nc = separar_tabs(linea, c, 5);
+            char *c[8] = {0};
+            int nc = separar_tabs(linea, c, 8);
             guint64 id = g_ascii_strtoull(c[0], NULL, 10);
             Itdb_Track *t = NULL;
             if (id) {
@@ -191,6 +194,10 @@ int main(int argc, char **argv) {
             if (nc > 2 && c[2][0]) { g_free(t->artist); t->artist = g_strdup(c[2]); g_free(t->sort_artist); t->sort_artist = NULL; }
             if (nc > 3 && c[3][0]) { g_free(t->album);  t->album  = g_strdup(c[3]); g_free(t->sort_album);  t->sort_album  = NULL; }
             if (nc > 4 && atoi(c[4]) > 0) t->tracklen = atoi(c[4]);
+            /* Claves de orden (romaji): el iPod ordena y agrupa por letra segun estos campos */
+            if (nc > 5 && c[5][0]) { g_free(t->sort_title);  t->sort_title  = g_strdup(c[5]); }
+            if (nc > 6 && c[6][0]) { g_free(t->sort_artist); t->sort_artist = g_strdup(c[6]); }
+            if (nc > 7 && c[7][0]) { g_free(t->sort_album);  t->sort_album  = g_strdup(c[7]); }
             printf("UPDATED\t%s\n", c[0]);
             fflush(stdout);
             cambiados++;
