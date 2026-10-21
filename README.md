@@ -56,7 +56,7 @@ Detecta Void, Debian/Ubuntu, Arch o Fedora e instala todo. En Void además activ
 ## 🚀 Compilar y ejecutar
 
 ```bash
-git clone git@github.com:vicente-arriagada-lost/iPop-Manager.git
+git clone https://github.com/brunosanhueza/iPop-manager.git
 cd iPop-Manager
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j"$(nproc)"
