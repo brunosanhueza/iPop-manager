@@ -2,6 +2,7 @@
 
 #include <QString>
 #include <QList>
+#include <QHash>
 #include <functional>
 #include "Track.h"
 
@@ -12,7 +13,8 @@ public:
         const QString& firewireGuid,
         const QList<QString>& sourceFilePaths,
         std::function<void(int current, int total, uint64_t currentBytes, uint64_t totalBytes, const QString& status)> progressCb = nullptr,
-        const QString& playlistName = QString()
+        const QString& playlistName = QString(),
+        const QHash<QString, Track>& metadata = QHash<QString, Track>()
     );
 
 private:

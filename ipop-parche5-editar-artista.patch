@@ -1,0 +1,895 @@
+diff -ruN '--exclude=.git' chk/CMakeLists.txt work/CMakeLists.txt
+--- a/CMakeLists.txt	2026-10-19 22:37:24.526734430 +0000
++++ b/CMakeLists.txt	2026-10-20 04:35:46.197139088 +0000
+@@ -44,6 +44,8 @@
+     src/ui/MainWindow.cpp
+     src/ui/DeleteProgressDialog.h
+     src/ui/DeleteProgressDialog.cpp
++    src/ui/MetadataEditDialog.h
++    src/ui/MetadataEditDialog.cpp
+     src/core/AudioConverter.h
+     src/core/AudioConverter.cpp
+     src/core/TrackImporter.h
+diff -ruN '--exclude=.git' chk/src/core/AudioConverter.cpp work/src/core/AudioConverter.cpp
+--- a/src/core/AudioConverter.cpp	2026-10-19 22:37:24.526335436 +0000
++++ b/src/core/AudioConverter.cpp	2026-10-20 04:37:17.596038146 +0000
+@@ -7,8 +7,14 @@
+ #include <QRegularExpression>
+ #include <QDateTime>
+ #include <QDebug>
++#include <QJsonArray>
++#include <QJsonDocument>
++#include <QJsonObject>
++#include <QStandardPaths>
+ 
+ QString AudioConverter::findFFmpegBinary() {
++#ifdef Q_OS_WIN
++
+     QStringList candidates = {
+         QDir(QCoreApplication::applicationDirPath()).filePath("tools/ffmpeg.exe"),
+         QDir::current().filePath("tools/ffmpeg.exe"),
+@@ -31,6 +37,37 @@
+     }
+ 
+     return "ffmpeg";
++#else
++    // En Linux/macOS NUNCA usar tools/ffmpeg.exe (binario de Windows): usar el ffmpeg del sistema
++    const QString sys = QStandardPaths::findExecutable("ffmpeg");
++    return sys.isEmpty() ? QString("ffmpeg") : sys;
++#endif
++}
++
++QString AudioConverter::findFFprobeBinary() {
++#ifdef Q_OS_WIN
++    const QFileInfo ff(findFFmpegBinary());
++    const QString probe = ff.dir().filePath("ffprobe.exe");
++    return QFile::exists(probe) ? QDir::toNativeSeparators(probe) : QString();
++#else
++    return QStandardPaths::findExecutable("ffprobe");
++#endif
++}
++
++bool AudioConverter::splitArtistTitle(const QString& text, QString& artist, QString& title) {
++    static const QStringList seps{QStringLiteral(" - "), QStringLiteral(" – "), QStringLiteral(" — ")};
++    int best = -1, sepLen = 0;
++    for (const QString& sep : seps) {
++        const int i = text.indexOf(sep);
++        if (i > 0 && (best < 0 || i < best)) { best = i; sepLen = sep.size(); }
++    }
++    if (best <= 0) return false;
++    const QString a = text.left(best).trimmed();
++    const QString t = text.mid(best + sepLen).trimmed();
++    if (a.isEmpty() || t.isEmpty() || a.size() > 80) return false;
++    artist = a;
++    title = t;
++    return true;
+ }
+ 
+ CompatibilityCheck AudioConverter::checkCompatibility(const QString& filePath, const QString& ipodModelName) {
+@@ -86,67 +123,118 @@
+     QFileInfo fi(filePath);
+     Track t;
+     t.title = fi.completeBaseName();
+-    t.artist = "Artista Desconocido";
+-    t.album = "Álbum Desconocido";
+     t.fileType = fi.suffix().toUpper();
+     t.sizeBytes = fi.size();
+-    t.durationMs = 180000; // 3 min por defecto
+-    t.bitrate = 256;
++    // Track trae valores por defecto ("Artista Desconocido", año actual...): partir de cero.
++    t.artist.clear();
++    t.album.clear();
++    t.genre.clear();
++    t.durationMs = 0;      // 0 = desconocida (antes se inventaban 3 min)
++    t.bitrate = 0;
+     t.sampleRate = 44100;
+-    t.trackNumber = 1;
+-    t.year = QDate::currentDate().year();
++    t.trackNumber = 0;
++    t.year = 0;
+ 
+-    QString ffmpeg = findFFmpegBinary();
+-    QProcess proc;
+-    QStringList args;
+-    args << "-i" << filePath << "-f" << "ffmetadata" << "-";
+-    proc.start(ffmpeg, args);
+-    if (!proc.waitForFinished(5000)) {
+-        proc.kill();
+-        return t;
+-    }
+-
+-    QString metaOutput = QString::fromUtf8(proc.readAllStandardOutput());
+-    QString errOutput = QString::fromUtf8(proc.readAllStandardError());
+-
+-    // Parsear líneas de ffmetadata
+-    const QStringList lines = metaOutput.split('\n');
+-    for (const auto& line : lines) {
+-        int eq = line.indexOf('=');
+-        if (eq > 0) {
+-            QString key = line.left(eq).trimmed().toLower();
+-            QString val = line.mid(eq + 1).trimmed();
+-            if (!val.isEmpty()) {
+-                if (key == "title") t.title = val;
+-                else if (key == "artist") t.artist = val;
+-                else if (key == "album") t.album = val;
+-                else if (key == "genre") t.genre = val;
+-                else if (key == "track") {
+-                    int slash = val.indexOf('/');
+-                    t.trackNumber = (slash > 0 ? val.left(slash) : val).toInt();
+-                }
+-                else if (key == "date" || key == "year") {
+-                    t.year = val.left(4).toInt();
++    bool hasTagTitle = false;
++    auto applyTag = [&](const QString& rawKey, const QString& rawVal) {
++        const QString key = rawKey.trimmed().toLower();
++        const QString val = rawVal.trimmed();
++        if (val.isEmpty()) return;
++        if (key == "title") { t.title = val; hasTagTitle = true; }
++        else if (key == "artist") t.artist = val;
++        else if (key == "album_artist" || key == "albumartist") { if (t.artist.isEmpty()) t.artist = val; }
++        else if (key == "album") t.album = val;
++        else if (key == "genre") t.genre = val;
++        else if (key == "track") {
++            const int slash = val.indexOf('/');
++            t.trackNumber = (slash > 0 ? val.left(slash) : val).toInt();
++        } else if (key == "date" || key == "year") {
++            const int y = val.left(4).toInt();
++            if (y > 1000) t.year = y;
++        }
++    };
++
++    bool probed = false;
++    const QString probe = findFFprobeBinary();
++    if (!probe.isEmpty()) {
++        QProcess p;
++        p.start(probe, {"-v", "error", "-print_format", "json", "-show_format", "-show_streams", filePath});
++        if (p.waitForStarted(3000) && p.waitForFinished(15000) && p.exitStatus() == QProcess::NormalExit) {
++            const QJsonDocument doc = QJsonDocument::fromJson(p.readAllStandardOutput());
++            if (doc.isObject()) {
++                const QJsonObject root = doc.object();
++                const QJsonObject fmt = root["format"].toObject();
++                bool ok = false;
++                const double dur = fmt["duration"].toString().toDouble(&ok);
++                if (ok && dur > 0) t.durationMs = qRound(dur * 1000.0);
++                const double br = fmt["bit_rate"].toString().toDouble(&ok);
++                if (ok && br > 0) t.bitrate = qRound(br / 1000.0);
++
++                const QJsonObject ftags = fmt["tags"].toObject();
++                for (auto it = ftags.begin(); it != ftags.end(); ++it) applyTag(it.key(), it.value().toString());
++
++                for (const QJsonValue& sv : root["streams"].toArray()) {
++                    const QJsonObject so = sv.toObject();
++                    if (so["codec_type"].toString() != "audio") continue;
++                    const int sr = so["sample_rate"].toString().toInt();
++                    if (sr > 0) t.sampleRate = sr;
++                    if (t.durationMs == 0) {
++                        const double sd = so["duration"].toString().toDouble(&ok);
++                        if (ok && sd > 0) t.durationMs = qRound(sd * 1000.0);
++                    }
++                    const QJsonObject stags = so["tags"].toObject();
++                    for (auto it = stags.begin(); it != stags.end(); ++it) {
++                        const QString k = it.key().toLower();
++                        if ((k == "title" && !hasTagTitle) || (k == "artist" && t.artist.isEmpty()) ||
++                            (k == "album" && t.album.isEmpty()))
++                            applyTag(it.key(), it.value().toString());
++                    }
++                    break;
+                 }
++                probed = true;
+             }
++        } else {
++            p.kill();
+         }
+     }
+ 
+-    // Extraer duración y bitrate desde stderr de ffmpeg: Duration: 00:03:45.67, bitrate: 256 kb/s
+-    static QRegularExpression durRegex(R"(Duration:\s*(\d{2}):(\d{2}):(\d{2})\.(\d{2}))");
+-    auto durMatch = durRegex.match(errOutput);
+-    if (durMatch.hasMatch()) {
+-        int hours = durMatch.captured(1).toInt();
+-        int mins = durMatch.captured(2).toInt();
+-        int secs = durMatch.captured(3).toInt();
+-        int ms = durMatch.captured(4).toInt() * 10;
+-        t.durationMs = ((hours * 3600) + (mins * 60) + secs) * 1000 + ms;
++    if (!probed) {
++        // Respaldo sin ffprobe: leer con ffmpeg
++        QProcess proc;
++        proc.start(findFFmpegBinary(), {"-hide_banner", "-i", filePath, "-f", "ffmetadata", "-"});
++        if (proc.waitForStarted(3000) && proc.waitForFinished(10000)) {
++            const QString metaOutput = QString::fromUtf8(proc.readAllStandardOutput());
++            const QString errOutput = QString::fromUtf8(proc.readAllStandardError());
++            for (const QString& line : metaOutput.split('\n')) {
++                const int eq = line.indexOf('=');
++                if (eq > 0) applyTag(line.left(eq), line.mid(eq + 1));
++            }
++            static QRegularExpression durRegex(R"(Duration:\s*(\d{2}):(\d{2}):(\d{2})\.(\d{2}))");
++            const auto dm = durRegex.match(errOutput);
++            if (dm.hasMatch()) {
++                t.durationMs = ((dm.captured(1).toInt() * 3600) + (dm.captured(2).toInt() * 60) + dm.captured(3).toInt()) * 1000
++                               + dm.captured(4).toInt() * 10;
++            }
++            static QRegularExpression brRegex(R"(bitrate:\s*(\d+)\s*kb/s)");
++            const auto bm = brRegex.match(errOutput);
++            if (bm.hasMatch()) t.bitrate = bm.captured(1).toInt();
++        } else {
++            proc.kill();
++            qWarning() << "extractMetadata: no se pudo leer" << filePath << "(¿ffmpeg/ffprobe instalado?)";
++        }
+     }
+ 
+-    static QRegularExpression brRegex(R"(bitrate:\s*(\d+)\s*kb/s)");
+-    auto brMatch = brRegex.match(errOutput);
+-    if (brMatch.hasMatch()) {
+-        t.bitrate = brMatch.captured(1).toInt();
++    // Artista: si las etiquetas no lo traen, sacarlo de "Artista - Titulo" (titulo o nombre del archivo)
++    QString a, ti;
++    if (t.artist.isEmpty()) {
++        if (hasTagTitle && splitArtistTitle(t.title, a, ti)) {
++            t.artist = a; t.title = ti;
++        } else if (splitArtistTitle(fi.completeBaseName(), a, ti)) {
++            t.artist = a;
++            if (!hasTagTitle) t.title = ti;
++        }
++    } else if (splitArtistTitle(t.title, a, ti) && a.compare(t.artist, Qt::CaseInsensitive) == 0) {
++        t.title = ti;   // "Kikuo - Cancion" con artista "Kikuo" -> "Cancion"
+     }
+ 
+     return t;
+diff -ruN '--exclude=.git' chk/src/core/AudioConverter.h work/src/core/AudioConverter.h
+--- a/src/core/AudioConverter.h	2026-10-19 22:37:24.526609821 +0000
++++ b/src/core/AudioConverter.h	2026-10-20 04:35:05.602357981 +0000
+@@ -15,6 +15,10 @@
+ class AudioConverter {
+ public:
+     static QString findFFmpegBinary();
++    static QString findFFprobeBinary();   // vacio si no hay ffprobe
++
++    // Separa "Artista - Titulo". Devuelve true si logra separar ambos (usa " - ", " – " o " — ").
++    static bool splitArtistTitle(const QString& text, QString& artist, QString& title);
+ 
+     static CompatibilityCheck checkCompatibility(const QString& filePath, const QString& ipodModelName);
+ 
+diff -ruN '--exclude=.git' chk/src/core/IpodTouchBridge.cpp work/src/core/IpodTouchBridge.cpp
+--- a/src/core/IpodTouchBridge.cpp	2026-10-19 22:37:24.546624671 +0000
++++ b/src/core/IpodTouchBridge.cpp	2026-10-20 23:19:21.885539251 +0000
+@@ -90,7 +90,8 @@
+ 
+ bool IpodTouchBridge::addTracks(const QString& mountPath, const QList<QString>& sourceFiles,
+                                 ProgressCb progressCb, QString* errorMsg, int* addedCount,
+-                                const QString& playlistName)
++                                const QString& playlistName,
++                                const QHash<QString, Track>& metadata)
+ {
+     s_lastMessage.clear();
+     if (addedCount) *addedCount = 0;
+@@ -161,7 +162,9 @@
+ 
+         QByteArray input;
+         for (const QString& src : chunk) {
+-            const Track t = AudioConverter::extractMetadata(src);
++            const QString absSrc = QFileInfo(src).absoluteFilePath();
++            const Track t = metadata.contains(absSrc) ? metadata.value(absSrc)
++                                                       : AudioConverter::extractMetadata(src);
+             input += (QStringList{
+                 QFileInfo(src).absoluteFilePath(), clean(t.title), clean(t.artist), QString::number(t.durationMs),
+                 clean(t.album), clean(t.genre), QString::number(t.bitrate),
+@@ -249,6 +252,57 @@
+     return added == total;
+ }
+ 
++bool IpodTouchBridge::updateTracks(const QString& mountPath, const QList<TrackEdit>& edits,
++                                   QString* errorMsg, int* updatedCount)
++{
++    if (updatedCount) *updatedCount = 0;
++    if (edits.isEmpty()) return false;
++    if (!toolsAvailable(errorMsg)) return false;
++    const QString tools = toolsDir();
++
++    QByteArray input;
++    for (const TrackEdit& e : edits) {
++        input += (QStringList{ QString::number(e.dbid), clean(e.title), clean(e.artist), clean(e.album),
++                               QString::number(e.durationMs) }.join('\t') + '\n').toUtf8();
++    }
++
++    QProcess proc;
++    proc.setProcessEnvironment(gestorEnv(tools));
++    proc.setProcessChannelMode(QProcess::MergedChannels);
++    proc.start(QDir(tools).filePath("gestor"), {mountPath, "settags"});
++    if (!proc.waitForStarted(5000)) {
++        if (errorMsg) *errorMsg = "No se pudo ejecutar gestor.";
++        return false;
++    }
++    proc.write(input);
++    proc.closeWriteChannel();
++
++    QByteArray all;
++    QElapsedTimer idle; idle.start();
++    while (!proc.waitForFinished(100)) {
++        const QByteArray d = proc.readAll();
++        if (!d.isEmpty()) { all += d; idle.restart(); }
++        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
++        if (idle.elapsed() > 10 * 60 * 1000) { proc.kill(); proc.waitForFinished(5000); break; }
++    }
++    all += proc.readAll();
++    const QString out = QString::fromUtf8(all);
++
++    int updated = 0;
++    QStringList failures;
++    for (const QString& line : out.split('\n')) {
++        if (line.startsWith("UPDATED\t")) ++updated;
++        else if (line.startsWith("FAIL\t")) failures << line.section('\t', 1, 1) + ": " + line.section('\t', 2);
++    }
++    if (updatedCount) *updatedCount = updated;
++    const bool ok = proc.exitStatus() == QProcess::NormalExit && proc.exitCode() == 0 &&
++                    out.contains("escrita OK") && updated > 0;
++    if (!ok && errorMsg)
++        *errorMsg = failures.isEmpty() ? "gestor no pudo guardar los cambios en la base de datos del iPod."
++                                       : failures.mid(0, 8).join("\n");
++    return ok;
++}
++
+ bool IpodTouchBridge::deleteTracks(const QString& mountPath, const QList<uint64_t>& dbids, QString* errorMsg) {
+     if (dbids.isEmpty()) return false;
+     if (!toolsAvailable(errorMsg)) return false;
+diff -ruN '--exclude=.git' chk/src/core/IpodTouchBridge.h work/src/core/IpodTouchBridge.h
+--- a/src/core/IpodTouchBridge.h	2026-10-19 22:37:24.546667331 +0000
++++ b/src/core/IpodTouchBridge.h	2026-10-20 23:19:21.884997935 +0000
+@@ -2,7 +2,9 @@
+ 
+ #include <QString>
+ #include <QList>
++#include <QHash>
+ #include <functional>
++#include "Track.h"
+ 
+ // Puente hacia las herramientas de tools/ipod (gestor + nochmod.so + openssl-legacy.cnf).
+ // Se usa con iPod Touch / iOS 4: la biblioteca vive en iTunesCDB + "iTunes Library.itlp"
+@@ -25,7 +27,19 @@
+                           ProgressCb progressCb = nullptr,
+                           QString* errorMsg = nullptr,
+                           int* addedCount = nullptr,
+-                          const QString& playlistName = QString());
++                          const QString& playlistName = QString(),
++                          const QHash<QString, Track>& metadata = QHash<QString, Track>());
++
++    // Cambios de datos de canciones ya existentes (campo vacio / 0 = no cambiar)
++    struct TrackEdit {
++        uint64_t dbid{0};
++        QString title;
++        QString artist;
++        QString album;
++        int durationMs{0};
++    };
++    static bool updateTracks(const QString& mountPath, const QList<TrackEdit>& edits,
++                             QString* errorMsg = nullptr, int* updatedCount = nullptr);
+ 
+     // Ultimo mensaje informativo/de error de addTracks (resumen, avisos de audio repetido, detalle del fallo)
+     static QString lastMessage();
+diff -ruN '--exclude=.git' chk/src/core/TrackImporter.cpp work/src/core/TrackImporter.cpp
+--- a/src/core/TrackImporter.cpp	2026-10-19 22:37:24.526252347 +0000
++++ b/src/core/TrackImporter.cpp	2026-10-20 04:35:13.780855692 +0000
+@@ -154,7 +154,8 @@
+     const QString& firewireGuid,
+     const QList<QString>& sourceFilePaths,
+     std::function<void(int current, int total, uint64_t currentBytes, uint64_t totalBytes, const QString& status)> progressCb,
+-    const QString& playlistName
++    const QString& playlistName,
++    const QHash<QString, Track>& metadata
+ ) {
+     if (sourceFilePaths.isEmpty() || mountPath.isEmpty()) return false;
+ 
+@@ -162,7 +163,7 @@
+     if (IpodTouchBridge::isTouchLayout(mountPath)) {
+         QString err;
+         int added = 0;
+-        const bool ok = IpodTouchBridge::addTracks(mountPath, sourceFilePaths, progressCb, &err, &added, playlistName);
++        const bool ok = IpodTouchBridge::addTracks(mountPath, sourceFilePaths, progressCb, &err, &added, playlistName, metadata);
+         if (!ok || !err.isEmpty()) qWarning() << "IpodTouchBridge::addTracks:" << err;
+         return ok;
+     }
+diff -ruN '--exclude=.git' chk/src/core/TrackImporter.h work/src/core/TrackImporter.h
+--- a/src/core/TrackImporter.h	2026-10-19 22:37:24.526362907 +0000
++++ b/src/core/TrackImporter.h	2026-10-20 04:35:13.780200834 +0000
+@@ -2,6 +2,7 @@
+ 
+ #include <QString>
+ #include <QList>
++#include <QHash>
+ #include <functional>
+ #include "Track.h"
+ 
+@@ -12,7 +13,8 @@
+         const QString& firewireGuid,
+         const QList<QString>& sourceFilePaths,
+         std::function<void(int current, int total, uint64_t currentBytes, uint64_t totalBytes, const QString& status)> progressCb = nullptr,
+-        const QString& playlistName = QString()
++        const QString& playlistName = QString(),
++        const QHash<QString, Track>& metadata = QHash<QString, Track>()
+     );
+ 
+ private:
+diff -ruN '--exclude=.git' chk/src/ui/MainWindow.cpp work/src/ui/MainWindow.cpp
+--- a/src/ui/MainWindow.cpp	2026-10-19 22:37:24.546667331 +0000
++++ b/src/ui/MainWindow.cpp	2026-10-20 23:19:21.887577225 +0000
+@@ -22,7 +22,15 @@
+ #include <QUrl>
+ #include <QDirIterator>
+ #include "DeleteProgressDialog.h"
++#include "MetadataEditDialog.h"
++#include <QProgressDialog>
+ #include <QDialog>
++#include <QFormLayout>
++#include <QLineEdit>
++#include <QCheckBox>
++#include <QDialogButtonBox>
++#include <QSet>
++#include <QFileInfo>
+ #include <QDoubleSpinBox>
+ #include <QProgressBar>
+ #include "../core/AudioConverter.h"
+@@ -362,6 +370,20 @@
+     connect(m_selectAllBtn, &QPushButton::clicked, this, &MainWindow::onToggleSelectAll);
+     songsHeaderRow->addWidget(m_selectAllBtn);
+ 
++    m_editTagsBtn = new QPushButton("✏️ Editar artista / duración", this);
++    m_editTagsBtn->setEnabled(false);
++    m_editTagsBtn->setToolTip("Cambia el artista o álbum de las canciones marcadas, o recalcula su duración leyendo el archivo (iPod Touch).");
++    m_editTagsBtn->setStyleSheet(
++        "QPushButton { "
++        "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #FDFDFD, stop:0.5 #EDEDED, stop:0.51 #E0E0E0, stop:1 #D0D0D0); "
++        "  border: 1px solid #8E949C; border-radius: 4px; padding: 4px 12px; font-size: 11px; font-weight: bold; color: #2E3338; "
++        "} "
++        "QPushButton:hover { background: #FFFFFF; border-color: #6A7078; } "
++        "QPushButton:disabled { background: #E2E5E8; color: #989EA6; border-color: #CCD0D6; }"
++    );
++    connect(m_editTagsBtn, &QPushButton::clicked, this, &MainWindow::onEditSelectedTracks);
++    songsHeaderRow->addWidget(m_editTagsBtn);
++
+     m_deleteBtn = new QPushButton("Eliminar seleccionadas", this);
+     m_deleteBtn->setEnabled(false);
+     m_deleteBtn->setStyleSheet(
+@@ -668,9 +690,12 @@
+     if (selectedCount > 0) {
+         m_deleteBtn->setEnabled(true);
+         m_deleteBtn->setText(QString("Eliminar seleccionadas (%1)").arg(selectedCount));
++        if (m_editTagsBtn)
++            m_editTagsBtn->setEnabled(m_currentDevice && IpodTouchBridge::isTouchLayout(m_currentDevice->mountPath()));
+     } else {
+         m_deleteBtn->setEnabled(false);
+         m_deleteBtn->setText("Eliminar seleccionadas");
++        if (m_editTagsBtn) m_editTagsBtn->setEnabled(false);
+         m_allSelected = false;
+         m_selectAllBtn->setText("Seleccionar todas");
+     }
+@@ -976,6 +1001,111 @@
+     m_trackTable->selectRow(prevIdx);
+ }
+ 
++void MainWindow::onEditSelectedTracks() {
++    if (!m_currentDevice || !IpodTouchBridge::isTouchLayout(m_currentDevice->mountPath())) {
++        QMessageBox::information(this, "Aviso", "Esta función está disponible para iPod Touch.");
++        return;
++    }
++    const QList<uint32_t> ids = m_trackModel->selectedTrackIds();
++    if (ids.isEmpty()) return;
++    const QSet<uint32_t> idSet(ids.begin(), ids.end());
++    QList<Track> sel;
++    for (const Track& t : m_activeTracks)
++        if (idSet.contains(t.id)) sel.append(t);
++    if (sel.isEmpty()) return;
++
++    auto isUnknown = [](const QString& a) {
++        const QString l = a.trimmed().toLower();
++        return l.isEmpty() || l.contains("desconocido") || l.contains("unknown");
++    };
++
++    // Si todas comparten un artista conocido, mostrarlo como valor inicial
++    QString commonArtist = sel.first().artist;
++    for (const Track& t : sel) if (t.artist != commonArtist) { commonArtist.clear(); break; }
++    if (isUnknown(commonArtist)) commonArtist.clear();
++
++    QDialog dlg(this);
++    dlg.setWindowTitle(QString("Editar %1 canción(es)").arg(sel.size()));
++    auto* form = new QFormLayout(&dlg);
++    auto* artistEdit = new QLineEdit(commonArtist, &dlg);
++    artistEdit->setPlaceholderText("Dejar vacío para no cambiarlo");
++    auto* albumEdit = new QLineEdit(&dlg);
++    albumEdit->setPlaceholderText("Dejar vacío para no cambiarlo");
++    auto* autoChk = new QCheckBox("Si falta el artista, tomarlo del título («Artista - Título»)", &dlg);
++    autoChk->setChecked(true);
++    auto* durChk = new QCheckBox("Recalcular la duración leyendo cada archivo", &dlg);
++    durChk->setChecked(true);
++    auto* box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
++    form->addRow("Artista:", artistEdit);
++    form->addRow("Álbum:", albumEdit);
++    form->addRow(autoChk);
++    form->addRow(durChk);
++    form->addRow(box);
++    connect(box, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
++    connect(box, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
++    if (dlg.exec() != QDialog::Accepted) return;
++
++    const QString manualArtist = artistEdit->text().trimmed();
++    const QString manualAlbum = albumEdit->text().trimmed();
++
++    // Calcular qué cambia en cada canción
++    QList<IpodTouchBridge::TrackEdit> edits;
++    QProgressDialog prog("Analizando canciones...", "Cancelar", 0, sel.size(), this);
++    prog.setWindowModality(Qt::WindowModal);
++    prog.setMinimumDuration(400);
++    int n = 0;
++    for (const Track& t : sel) {
++        prog.setValue(n++);
++        if (prog.wasCanceled()) return;
++        if (t.dbid == 0) continue;
++
++        IpodTouchBridge::TrackEdit e;
++        e.dbid = t.dbid;
++        bool changed = false;
++
++        if (!manualArtist.isEmpty()) {
++            if (t.artist != manualArtist) { e.artist = manualArtist; changed = true; }
++        } else if (autoChk->isChecked() && isUnknown(t.artist)) {
++            QString a, ti;
++            if (AudioConverter::splitArtistTitle(t.title, a, ti)) { e.artist = a; e.title = ti; changed = true; }
++        }
++        if (!manualAlbum.isEmpty() && t.album != manualAlbum) { e.album = manualAlbum; changed = true; }
++
++        if (durChk->isChecked() && !t.filePath.isEmpty()) {
++            const QString phys = ITunesDBReader::resolvePhysicalPath(m_currentDevice->mountPath(), t.filePath);
++            if (QFileInfo::exists(phys)) {
++                const int real = AudioConverter::extractMetadata(phys).durationMs;
++                if (real > 0 && qAbs(real - t.durationMs) > 1500) { e.durationMs = real; changed = true; }
++            }
++        }
++        if (changed) edits.append(e);
++    }
++    prog.setValue(sel.size());
++
++    if (edits.isEmpty()) {
++        QMessageBox::information(this, "Sin cambios", "No hay nada que cambiar en las canciones marcadas.");
++        return;
++    }
++
++    const int savedPlaylistIndex = m_currentPlaylistIndex;
++    QString err;
++    int updated = 0;
++    QApplication::setOverrideCursor(Qt::WaitCursor);
++    const bool ok = IpodTouchBridge::updateTracks(m_currentDevice->mountPath(), edits, &err, &updated);
++    QApplication::restoreOverrideCursor();
++
++    m_currentDevice->loadPlaylists();
++    updateDeviceView();
++    populateTreeOrganizer();
++    selectPlaylistIndex(savedPlaylistIndex);
++
++    if (!ok) {
++        QMessageBox::warning(this, "No se pudo guardar", err);
++        return;
++    }
++    statusBar()->showMessage(QString("%1 canciones actualizadas. Reinicia el iPod (Sleep + Home) para verlas en la app Música.").arg(updated));
++}
++
+ void MainWindow::onAddTracks() {
+     if (!m_currentDevice || !m_currentDevice->isValid()) {
+         QMessageBox::information(this, "Aviso", "Conecta o selecciona un iPod primero.");
+@@ -1156,6 +1286,34 @@
+         return;
+     }
+ 
++    // iPod Touch: leer titulo/artista/duracion reales y dejar que el usuario los revise o edite
++    QHash<QString, Track> metaOverrides;
++    if (isTouch) {
++        QList<Track> tracks;
++        {
++            QProgressDialog pd("Leyendo metadatos de las canciones...", "Cancelar", 0, filesToImport.size(), this);
++            pd.setWindowModality(Qt::WindowModal);
++            pd.setMinimumDuration(0);
++            for (int i = 0; i < filesToImport.size(); ++i) {
++                pd.setValue(i);
++                if (pd.wasCanceled()) return;
++                tracks.append(AudioConverter::extractMetadata(filesToImport.at(i)));
++            }
++            pd.setValue(filesToImport.size());
++        }
++        bool missingArtist = false;
++        for (const Track& t : tracks) {
++            if (t.artist.isEmpty()) { missingArtist = true; break; }
++        }
++        if (MetadataEditDialog::alwaysReview() || missingArtist) {
++            MetadataEditDialog dlg(filesToImport, tracks, this);
++            if (dlg.exec() != QDialog::Accepted) return;
++            tracks = dlg.tracks();
++        }
++        for (int i = 0; i < filesToImport.size(); ++i)
++            metaOverrides.insert(QFileInfo(filesToImport.at(i)).absoluteFilePath(), tracks.at(i));
++    }
++
+     uint64_t totalBytes = 0;
+     for (const auto& f : filesToImport) {
+         totalBytes += QFileInfo(f).size();
+@@ -1188,7 +1346,8 @@
+             Q_UNUSED(totBytes);
+             importDlg->updateProgress(curBytes, status);
+         },
+-        targetPlaylist
++        targetPlaylist,
++        metaOverrides
+     );
+ 
+     importDlg->setComplete("¡Canciones transferidas con éxito!");
+diff -ruN '--exclude=.git' chk/src/ui/MainWindow.h work/src/ui/MainWindow.h
+--- a/src/ui/MainWindow.h	2026-10-19 22:37:24.525463217 +0000
++++ b/src/ui/MainWindow.h	2026-10-20 23:19:21.885893495 +0000
+@@ -30,6 +30,7 @@
+     void onDeviceSelected(int index);
+     void onEjectDevice();
+     void onAddTracks();
++    void onEditSelectedTracks();
+     void onTreeItemClicked(QTreeWidgetItem* item, int column);
+     void onTreeItemChanged(QTreeWidgetItem* item, int column);
+     void onTreeContextMenu(const QPoint& pos);
+@@ -98,6 +99,7 @@
+     QLineEdit* m_searchEdit{nullptr};
+     QPushButton* m_selectAllBtn{nullptr};
+     QPushButton* m_deleteBtn{nullptr};
++    QPushButton* m_editTagsBtn{nullptr};
+     QTableView* m_trackTable{nullptr};
+     TrackTableModel* m_trackModel{nullptr};
+ 
+diff -ruN '--exclude=.git' chk/src/ui/MetadataEditDialog.cpp work/src/ui/MetadataEditDialog.cpp
+--- a/src/ui/MetadataEditDialog.cpp	1970-01-01 00:00:00.000000000 +0000
++++ b/src/ui/MetadataEditDialog.cpp	2026-10-20 04:35:46.183903316 +0000
+@@ -0,0 +1,145 @@
++#include "MetadataEditDialog.h"
++#include "../core/AudioConverter.h"
++
++#include <QCheckBox>
++#include <QDialogButtonBox>
++#include <QFileInfo>
++#include <QHBoxLayout>
++#include <QHeaderView>
++#include <QLabel>
++#include <QLineEdit>
++#include <QPushButton>
++#include <QSet>
++#include <QSettings>
++#include <QTableWidget>
++#include <QVBoxLayout>
++
++namespace {
++enum Col { ColFile = 0, ColTitle, ColArtist, ColAlbum, ColDuration, ColCount };
++
++QString fmtDuration(int ms) {
++    if (ms <= 0) return QStringLiteral("?");
++    const int total = (ms + 500) / 1000;
++    return QString("%1:%2").arg(total / 60).arg(total % 60, 2, 10, QChar('0'));
++}
++}
++
++MetadataEditDialog::MetadataEditDialog(const QStringList& files, const QList<Track>& tracks, QWidget* parent)
++    : QDialog(parent), m_tracks(tracks)
++{
++    setWindowTitle("Revisar canciones antes de añadir");
++    resize(980, 580);
++
++    auto* root = new QVBoxLayout(this);
++
++    auto* info = new QLabel(
++        "Revisa el título y el artista de cada canción (doble clic para editar). "
++        "Lo que escribas aquí es lo que se guardará en el iPod. "
++        "Si una canción no tiene artista en sus etiquetas, puedes sacarlo del nombre «Artista - Título» o escribirlo a mano.");
++    info->setWordWrap(true);
++    root->addWidget(info);
++
++    auto* bar = new QHBoxLayout();
++    bar->addWidget(new QLabel("Artista:"));
++    m_artistEdit = new QLineEdit();
++    m_artistEdit->setPlaceholderText("Escribe un artista para aplicarlo");
++    bar->addWidget(m_artistEdit, 1);
++    auto* applyBtn = new QPushButton("Aplicar a seleccionadas (o a todas)");
++    bar->addWidget(applyBtn);
++    auto* splitBtn = new QPushButton("Artista desde «Artista - Título»");
++    splitBtn->setToolTip("En las filas sin artista, separa el título en artista y título usando « - »");
++    bar->addWidget(splitBtn);
++    root->addLayout(bar);
++
++    m_table = new QTableWidget(files.size(), ColCount);
++    m_table->setHorizontalHeaderLabels({"Archivo", "Título", "Artista", "Álbum", "Duración"});
++    m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
++    m_table->setAlternatingRowColors(true);
++    m_table->horizontalHeader()->setSectionResizeMode(ColFile, QHeaderView::Interactive);
++    m_table->horizontalHeader()->setSectionResizeMode(ColTitle, QHeaderView::Stretch);
++    m_table->horizontalHeader()->setSectionResizeMode(ColArtist, QHeaderView::Stretch);
++    m_table->horizontalHeader()->setSectionResizeMode(ColAlbum, QHeaderView::Interactive);
++    m_table->setColumnWidth(ColFile, 200);
++    m_table->setColumnWidth(ColAlbum, 140);
++    m_table->setColumnWidth(ColDuration, 70);
++
++    for (int i = 0; i < files.size() && i < m_tracks.size(); ++i) {
++        const Track& t = m_tracks.at(i);
++        auto* fileItem = new QTableWidgetItem(QFileInfo(files.at(i)).fileName());
++        fileItem->setFlags(fileItem->flags() & ~Qt::ItemIsEditable);
++        fileItem->setToolTip(files.at(i));
++        m_table->setItem(i, ColFile, fileItem);
++        m_table->setItem(i, ColTitle, new QTableWidgetItem(t.title));
++        m_table->setItem(i, ColArtist, new QTableWidgetItem(t.artist));
++        m_table->setItem(i, ColAlbum, new QTableWidgetItem(t.album));
++        auto* durItem = new QTableWidgetItem(fmtDuration(t.durationMs));
++        durItem->setFlags(durItem->flags() & ~Qt::ItemIsEditable);
++        m_table->setItem(i, ColDuration, durItem);
++    }
++    root->addWidget(m_table, 1);
++
++    m_alwaysChk = new QCheckBox("Mostrar siempre esta ventana al añadir canciones (si lo desmarcas, solo aparece cuando falte el artista)");
++    m_alwaysChk->setChecked(alwaysReview());
++    root->addWidget(m_alwaysChk);
++
++    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
++    buttons->button(QDialogButtonBox::Ok)->setText("Añadir al iPod");
++    buttons->button(QDialogButtonBox::Cancel)->setText("Cancelar");
++    root->addWidget(buttons);
++
++    connect(applyBtn, &QPushButton::clicked, this, &MetadataEditDialog::applyArtistToRows);
++    connect(splitBtn, &QPushButton::clicked, this, &MetadataEditDialog::artistFromTitle);
++    connect(buttons, &QDialogButtonBox::accepted, this, &MetadataEditDialog::onAccepted);
++    connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
++}
++
++bool MetadataEditDialog::alwaysReview() {
++    return QSettings().value("import/reviewAlways", true).toBool();
++}
++
++QList<int> MetadataEditDialog::targetRows() const {
++    QSet<int> sel;
++    for (const auto& idx : m_table->selectionModel()->selectedRows()) sel.insert(idx.row());
++    QList<int> rows;
++    if (sel.isEmpty()) {
++        for (int r = 0; r < m_table->rowCount(); ++r) rows.append(r);
++    } else {
++        rows = sel.values();
++    }
++    return rows;
++}
++
++void MetadataEditDialog::applyArtistToRows() {
++    const QString artist = m_artistEdit->text().trimmed();
++    if (artist.isEmpty()) return;
++    for (int r : targetRows()) m_table->item(r, ColArtist)->setText(artist);
++}
++
++void MetadataEditDialog::artistFromTitle() {
++    for (int r : targetRows()) {
++        if (!m_table->item(r, ColArtist)->text().trimmed().isEmpty()) continue;
++        QString artist, title;
++        // primero el titulo; si no, el nombre del archivo
++        if (AudioConverter::splitArtistTitle(m_table->item(r, ColTitle)->text(), artist, title) ||
++            AudioConverter::splitArtistTitle(QFileInfo(m_table->item(r, ColFile)->toolTip()).completeBaseName(), artist, title)) {
++            m_table->item(r, ColArtist)->setText(artist);
++            m_table->item(r, ColTitle)->setText(title);
++        }
++    }
++}
++
++QList<Track> MetadataEditDialog::tracks() const {
++    QList<Track> out = m_tracks;
++    for (int r = 0; r < out.size() && r < m_table->rowCount(); ++r) {
++        const QString title = m_table->item(r, ColTitle)->text().trimmed();
++        if (!title.isEmpty()) out[r].title = title;
++        out[r].artist = m_table->item(r, ColArtist)->text().trimmed();
++        out[r].album = m_table->item(r, ColAlbum)->text().trimmed();
++    }
++    return out;
++}
++
++void MetadataEditDialog::onAccepted() {
++    QSettings().setValue("import/reviewAlways", m_alwaysChk->isChecked());
++    accept();
++}
+diff -ruN '--exclude=.git' chk/src/ui/MetadataEditDialog.h work/src/ui/MetadataEditDialog.h
+--- a/src/ui/MetadataEditDialog.h	1970-01-01 00:00:00.000000000 +0000
++++ b/src/ui/MetadataEditDialog.h	2026-10-20 04:35:46.182573076 +0000
+@@ -0,0 +1,36 @@
++#pragma once
++
++#include <QDialog>
++#include <QList>
++#include <QStringList>
++#include "../core/Track.h"
++
++class QTableWidget;
++class QLineEdit;
++class QCheckBox;
++
++// Ventana para revisar/editar titulo, artista y album antes de copiar las canciones al iPod.
++class MetadataEditDialog : public QDialog {
++    Q_OBJECT
++public:
++    MetadataEditDialog(const QStringList& files, const QList<Track>& tracks, QWidget* parent = nullptr);
++
++    // Pistas con los cambios hechos por el usuario (mismo orden que 'files')
++    QList<Track> tracks() const;
++
++    // true = mostrar siempre esta ventana al importar (si es false, solo cuando falte el artista)
++    static bool alwaysReview();
++
++private slots:
++    void applyArtistToRows();
++    void artistFromTitle();
++    void onAccepted();
++
++private:
++    QList<int> targetRows() const;
++
++    QList<Track> m_tracks;
++    QTableWidget* m_table{nullptr};
++    QLineEdit* m_artistEdit{nullptr};
++    QCheckBox* m_alwaysChk{nullptr};
++};
+diff -ruN '--exclude=.git' chk/tools/ipod/gestor.c work/tools/ipod/gestor.c
+--- a/tools/ipod/gestor.c	2026-10-19 22:37:24.526978010 +0000
++++ b/tools/ipod/gestor.c	2026-10-20 23:19:21.884694607 +0000
+@@ -57,10 +57,11 @@
+             "  %s <mountpoint> add <archivo.mp3> [titulo] [artista] [duracion_ms]\n"
+             "  %s <mountpoint> addmany      (lee stdin: archivo TAB titulo TAB artista TAB dur_ms TAB album TAB genero TAB bitrate TAB anio TAB pista)\n"
+             "  %s <mountpoint> del <dbid> [dbid ...]\n"
++            "  %s <mountpoint> settags      (lee stdin: dbid TAB titulo TAB artista TAB album TAB dur_ms; campo vacio = no cambiar)\n"
+             "  %s <mountpoint> plnew <nombre>\n"
+             "  %s <mountpoint> plrename <nombre_actual> <nombre_nuevo>\n"
+             "  %s <mountpoint> pldel <nombre> [nombre ...]\n"
+-            "  (addmany acepta un nombre de lista opcional: addmany <lista>)\n", argv[0], argv[0], argv[0], argv[0], argv[0], argv[0], argv[0]);
++            "  (addmany acepta un nombre de lista opcional: addmany <lista>)\n", argv[0], argv[0], argv[0], argv[0], argv[0], argv[0], argv[0], argv[0]);
+         return 1;
+     }
+     const char *mp = argv[1];
+@@ -129,7 +130,7 @@
+             gchar *base = g_path_get_basename(file);
+             Itdb_Track *t = itdb_track_new();
+             t->title  = g_strdup((nc > 1 && c[1][0]) ? c[1] : base);
+-            t->artist = g_strdup((nc > 2 && c[2][0]) ? c[2] : "Desconocido");
++            if (nc > 2 && c[2][0]) t->artist = g_strdup(c[2]);   /* sin artista: se deja vacio */
+             t->tracklen = (nc > 3) ? atoi(c[3]) : 0;
+             if (nc > 4 && c[4][0]) t->album = g_strdup(c[4]);
+             if (nc > 5 && c[5][0]) t->genre = g_strdup(c[5]);
+@@ -164,6 +165,41 @@
+         itdb_free(db);
+         return ok > 0 ? 0 : 1;
+ 
++    } else if (!strcmp(cmd, "settags")) {
++        char linea[8192];
++        int cambiados = 0, fallos = 0;
++        while (fgets(linea, sizeof linea, stdin)) {
++            size_t len = strlen(linea);
++            while (len && (linea[len-1] == '\n' || linea[len-1] == '\r')) linea[--len] = '\0';
++            if (!len) continue;
++
++            char *c[5] = {0};
++            int nc = separar_tabs(linea, c, 5);
++            guint64 id = g_ascii_strtoull(c[0], NULL, 10);
++            Itdb_Track *t = NULL;
++            if (id) {
++                for (GList *l = db->tracks; l; l = l->next)
++                    if (((Itdb_Track *)l->data)->dbid == id) { t = l->data; break; }
++            }
++            if (!t) {
++                printf("FAIL\t%s\tno existe una cancion con ese id\n", c[0]);
++                fflush(stdout); fallos++;
++                continue;
++            }
++            if (nc > 1 && c[1][0]) { g_free(t->title);  t->title  = g_strdup(c[1]); g_free(t->sort_title);  t->sort_title  = NULL; }
++            if (nc > 2 && c[2][0]) { g_free(t->artist); t->artist = g_strdup(c[2]); g_free(t->sort_artist); t->sort_artist = NULL; }
++            if (nc > 3 && c[3][0]) { g_free(t->album);  t->album  = g_strdup(c[3]); g_free(t->sort_album);  t->sort_album  = NULL; }
++            if (nc > 4 && atoi(c[4]) > 0) t->tracklen = atoi(c[4]);
++            printf("UPDATED\t%s\n", c[0]);
++            fflush(stdout);
++            cambiados++;
++        }
++        if (cambiados > 0) guardar(db);
++        printf("RESUMEN\t%d\t%d\n", cambiados, fallos);
++        fflush(stdout);
++        itdb_free(db);
++        return cambiados > 0 ? 0 : 1;
++
+     } else if (!strcmp(cmd, "plnew") && argc >= 4) {
+         if (!argv[3][0] || itdb_playlist_by_name(db, argv[3])) {
+             fprintf(stderr, "Nombre invalido o ya existe una lista llamada '%s'\n", argv[3]);

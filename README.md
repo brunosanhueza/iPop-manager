@@ -14,6 +14,9 @@ Permite ver la biblioteca de un iPod, **añadir canciones, eliminarlas, crear li
 * Se detecta por USB y se **monta solo** con `ifuse` (no hace falta tocar nada en la terminal).
 * **Añadir canciones** con el botón **➕ Añadir canciones** o arrastrando archivos a la ventana (mp3, m4a, aac; el resto se convierte a MP3 con FFmpeg).
 * **Eliminar canciones** de la biblioteca (borra la canción y su archivo del iPod).
+* **Revisar título, artista y álbum antes de añadir** (ventana editable; puede sacar el artista de nombres tipo «Artista - Título»). La duración se lee de cada archivo.
+* **✏️ Editar artista / duración** de canciones que ya están en el iPod (a mano, desde el título, o recalculando la duración).
+* **🖼️ Cambiar o quitar carátulas**: una imagen para las canciones marcadas (o para todo el álbum), o la imagen incrustada en cada archivo.
 * **Crear, renombrar y eliminar listas de reproducción**, y añadir canciones nuevas directamente a la lista seleccionada.
 * **Reproducir** las canciones del iPod desde el reproductor integrado.
 * **Expulsar** de forma segura.
@@ -102,7 +105,7 @@ Para restaurar: borra `iTunesCDB.*` temporales y copia el contenido del respaldo
 
 * **Eliminar es definitivo:** se borra el archivo de música del iPod, sin papelera. La app pide confirmación.
 * Para eliminar canciones hay que estar en la **biblioteca completa**; no se puede quitar una canción de una lista sin borrarla.
-* Las **carátulas** no se escriben al añadir canciones.
+* Las **carátulas** se pueden cambiar con el botón 🖼️, pero la app todavía **no las muestra**; se ven en la app Música del iPod tras reiniciarlo. Esta función está probada con un iPod simulado, no en un Touch real: prueba primero con una sola canción.
 * La lista maestra se reconoce por el nombre `iPod de Zacky` o, si no existe, por ser la lista que contiene **todas** las canciones. Si tu iPod tiene un nombre distinto, esto es una heurística poco probada.
 * Solo se cargan directamente **mp3, m4a y aac**.
 * Crear/renombrar/eliminar listas y los nombres de lista duplicados (se rechazan) tienen pruebas limitadas.

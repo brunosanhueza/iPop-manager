@@ -1,0 +1,409 @@
+diff -ruN '--exclude=.git' chk5/README.md work/README.md
+--- a/README.md	2026-10-20 23:20:24.798491906 +0000
++++ b/README.md	2026-10-20 23:33:41.723737904 +0000
+@@ -14,6 +14,9 @@
+ * Se detecta por USB y se **monta solo** con `ifuse` (no hace falta tocar nada en la terminal).
+ * **Añadir canciones** con el botón **➕ Añadir canciones** o arrastrando archivos a la ventana (mp3, m4a, aac; el resto se convierte a MP3 con FFmpeg).
+ * **Eliminar canciones** de la biblioteca (borra la canción y su archivo del iPod).
++* **Revisar título, artista y álbum antes de añadir** (ventana editable; puede sacar el artista de nombres tipo «Artista - Título»). La duración se lee de cada archivo.
++* **✏️ Editar artista / duración** de canciones que ya están en el iPod (a mano, desde el título, o recalculando la duración).
++* **🖼️ Cambiar o quitar carátulas**: una imagen para las canciones marcadas (o para todo el álbum), o la imagen incrustada en cada archivo.
+ * **Crear, renombrar y eliminar listas de reproducción**, y añadir canciones nuevas directamente a la lista seleccionada.
+ * **Reproducir** las canciones del iPod desde el reproductor integrado.
+ * **Expulsar** de forma segura.
+@@ -102,7 +105,7 @@
+ 
+ * **Eliminar es definitivo:** se borra el archivo de música del iPod, sin papelera. La app pide confirmación.
+ * Para eliminar canciones hay que estar en la **biblioteca completa**; no se puede quitar una canción de una lista sin borrarla.
+-* Las **carátulas** no se escriben al añadir canciones.
++* Las **carátulas** se pueden cambiar con el botón 🖼️, pero la app todavía **no las muestra**; se ven en la app Música del iPod tras reiniciarlo. Esta función está probada con un iPod simulado, no en un Touch real: prueba primero con una sola canción.
+ * La lista maestra se reconoce por el nombre `iPod de Zacky` o, si no existe, por ser la lista que contiene **todas** las canciones. Si tu iPod tiene un nombre distinto, esto es una heurística poco probada.
+ * Solo se cargan directamente **mp3, m4a y aac**.
+ * Crear/renombrar/eliminar listas y los nombres de lista duplicados (se rechazan) tienen pruebas limitadas.
+diff -ruN '--exclude=.git' chk5/src/core/IpodTouchBridge.cpp work/src/core/IpodTouchBridge.cpp
+--- a/src/core/IpodTouchBridge.cpp	2026-10-20 23:20:24.817826596 +0000
++++ b/src/core/IpodTouchBridge.cpp	2026-10-20 23:32:33.943775744 +0000
+@@ -303,6 +303,81 @@
+     return ok;
+ }
+ 
++bool IpodTouchBridge::setArtwork(const QString& mountPath, const QList<ArtworkEdit>& edits,
++                                 QString* errorMsg, int* updatedCount)
++{
++    if (updatedCount) *updatedCount = 0;
++    if (edits.isEmpty()) return false;
++    if (!toolsAvailable(errorMsg)) return false;
++    const QString tools = toolsDir();
++
++    QByteArray input;
++    for (const ArtworkEdit& e : edits)
++        input += (QString::number(e.dbid) + '\t' + clean(e.imagePath) + '\n').toUtf8();
++
++    QProcess proc;
++    proc.setProcessEnvironment(gestorEnv(tools));
++    proc.setProcessChannelMode(QProcess::MergedChannels);
++    proc.start(QDir(tools).filePath("gestor"), {mountPath, "setart"});
++    if (!proc.waitForStarted(5000)) {
++        if (errorMsg) *errorMsg = "No se pudo ejecutar gestor.";
++        return false;
++    }
++    proc.write(input);
++    proc.closeWriteChannel();
++
++    QByteArray all;
++    QElapsedTimer idle; idle.start();
++    while (!proc.waitForFinished(100)) {
++        const QByteArray d = proc.readAll();
++        if (!d.isEmpty()) { all += d; idle.restart(); }
++        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
++        if (idle.elapsed() > 10 * 60 * 1000) { proc.kill(); proc.waitForFinished(5000); break; }
++    }
++    all += proc.readAll();
++    const QString out = QString::fromUtf8(all);
++
++    int updated = 0;
++    QStringList failures;
++    for (const QString& line : out.split('\n')) {
++        if (line.startsWith("UPDATED\t")) ++updated;
++        else if (line.startsWith("FAIL\t")) failures << line.section('\t', 1, 1) + ": " + line.section('\t', 2);
++        else if (line.startsWith("Error:")) failures << line;
++    }
++    if (updatedCount) *updatedCount = updated;
++    const bool ok = proc.exitStatus() == QProcess::NormalExit && proc.exitCode() == 0 &&
++                    out.contains("escrita OK") && updated > 0;
++    if (errorMsg) {
++        if (!ok)
++            *errorMsg = failures.isEmpty() ? "gestor no pudo guardar las caratulas en el iPod." : failures.mid(0, 8).join("\n");
++        else if (!failures.isEmpty())
++            *errorMsg = "Algunas caratulas no se pudieron aplicar:\n" + failures.mid(0, 8).join("\n");
++    }
++    return ok;
++}
++
++static bool runFfmpegCover(const QStringList& inputArgs, const QString& outJpg) {
++    const QString ffmpeg = QStandardPaths::findExecutable("ffmpeg");
++    if (ffmpeg.isEmpty()) return false;
++    QFile::remove(outJpg);
++    QStringList args{"-y", "-v", "error"};
++    args << inputArgs << "-frames:v" << "1"
++         << "-vf" << "scale=600:600:force_original_aspect_ratio=increase,crop=600:600"
++         << "-q:v" << "2" << outJpg;
++    QProcess p;
++    p.start(ffmpeg, args);
++    if (!p.waitForStarted(3000) || !p.waitForFinished(30000)) { p.kill(); p.waitForFinished(1000); return false; }
++    return p.exitStatus() == QProcess::NormalExit && p.exitCode() == 0 && QFileInfo(outJpg).size() > 0;
++}
++
++bool IpodTouchBridge::prepareCoverImage(const QString& sourceImage, const QString& outJpg) {
++    return runFfmpegCover({"-i", sourceImage}, outJpg);
++}
++
++bool IpodTouchBridge::extractEmbeddedCover(const QString& audioFile, const QString& outJpg) {
++    return runFfmpegCover({"-i", audioFile, "-map", "0:v:0"}, outJpg);
++}
++
+ bool IpodTouchBridge::deleteTracks(const QString& mountPath, const QList<uint64_t>& dbids, QString* errorMsg) {
+     if (dbids.isEmpty()) return false;
+     if (!toolsAvailable(errorMsg)) return false;
+diff -ruN '--exclude=.git' chk5/src/core/IpodTouchBridge.h work/src/core/IpodTouchBridge.h
+--- a/src/core/IpodTouchBridge.h	2026-10-20 23:20:24.817841285 +0000
++++ b/src/core/IpodTouchBridge.h	2026-10-20 23:32:33.943206158 +0000
+@@ -41,6 +41,19 @@
+     static bool updateTracks(const QString& mountPath, const QList<TrackEdit>& edits,
+                              QString* errorMsg = nullptr, int* updatedCount = nullptr);
+ 
++    // Caratulas: imagePath = ruta a una imagen, o "-" para quitar la caratula de esa cancion
++    struct ArtworkEdit {
++        uint64_t dbid{0};
++        QString imagePath;
++    };
++    static bool setArtwork(const QString& mountPath, const QList<ArtworkEdit>& edits,
++                           QString* errorMsg = nullptr, int* updatedCount = nullptr);
++
++    // Convierte cualquier imagen a un JPEG cuadrado de 600x600 (con ffmpeg). Devuelve true si lo logra.
++    static bool prepareCoverImage(const QString& sourceImage, const QString& outJpg);
++    // Extrae la caratula incrustada de un archivo de audio (mp3/m4a) a un JPEG cuadrado. false si no tiene.
++    static bool extractEmbeddedCover(const QString& audioFile, const QString& outJpg);
++
+     // Ultimo mensaje informativo/de error de addTracks (resumen, avisos de audio repetido, detalle del fallo)
+     static QString lastMessage();
+ 
+diff -ruN '--exclude=.git' chk5/src/ui/MainWindow.cpp work/src/ui/MainWindow.cpp
+--- a/src/ui/MainWindow.cpp	2026-10-20 23:20:24.817864029 +0000
++++ b/src/ui/MainWindow.cpp	2026-10-20 23:32:33.946150863 +0000
+@@ -30,6 +30,9 @@
+ #include <QCheckBox>
+ #include <QDialogButtonBox>
+ #include <QSet>
++#include <QRadioButton>
++#include <QTemporaryDir>
++#include <QLabel>
+ #include <QFileInfo>
+ #include <QDoubleSpinBox>
+ #include <QProgressBar>
+@@ -384,6 +387,13 @@
+     connect(m_editTagsBtn, &QPushButton::clicked, this, &MainWindow::onEditSelectedTracks);
+     songsHeaderRow->addWidget(m_editTagsBtn);
+ 
++    m_artBtn = new QPushButton("🖼️ Carátula", this);
++    m_artBtn->setEnabled(false);
++    m_artBtn->setToolTip("Cambia o quita la carátula de las canciones marcadas (iPod Touch).");
++    m_artBtn->setStyleSheet(m_editTagsBtn->styleSheet());
++    connect(m_artBtn, &QPushButton::clicked, this, &MainWindow::onEditArtwork);
++    songsHeaderRow->addWidget(m_artBtn);
++
+     m_deleteBtn = new QPushButton("Eliminar seleccionadas", this);
+     m_deleteBtn->setEnabled(false);
+     m_deleteBtn->setStyleSheet(
+@@ -692,10 +702,13 @@
+         m_deleteBtn->setText(QString("Eliminar seleccionadas (%1)").arg(selectedCount));
+         if (m_editTagsBtn)
+             m_editTagsBtn->setEnabled(m_currentDevice && IpodTouchBridge::isTouchLayout(m_currentDevice->mountPath()));
++        if (m_artBtn)
++            m_artBtn->setEnabled(m_currentDevice && IpodTouchBridge::isTouchLayout(m_currentDevice->mountPath()));
+     } else {
+         m_deleteBtn->setEnabled(false);
+         m_deleteBtn->setText("Eliminar seleccionadas");
+         if (m_editTagsBtn) m_editTagsBtn->setEnabled(false);
++        if (m_artBtn) m_artBtn->setEnabled(false);
+         m_allSelected = false;
+         m_selectAllBtn->setText("Seleccionar todas");
+     }
+@@ -1001,6 +1014,148 @@
+     m_trackTable->selectRow(prevIdx);
+ }
+ 
++void MainWindow::onEditArtwork() {
++    if (!m_currentDevice || !IpodTouchBridge::isTouchLayout(m_currentDevice->mountPath())) {
++        QMessageBox::information(this, "Aviso", "Esta función está disponible para iPod Touch.");
++        return;
++    }
++    const QList<uint32_t> ids = m_trackModel->selectedTrackIds();
++    if (ids.isEmpty()) return;
++    const QSet<uint32_t> idSet(ids.begin(), ids.end());
++    QList<Track> sel;
++    for (const Track& t : m_activeTracks)
++        if (idSet.contains(t.id) && t.dbid != 0) sel.append(t);
++    if (sel.isEmpty()) return;
++
++    QDialog dlg(this);
++    dlg.setWindowTitle(QString("Carátula de %1 canción(es)").arg(sel.size()));
++    auto* lay = new QVBoxLayout(&dlg);
++    auto* note = new QLabel(
++        "Prueba primero con UNA canción y reinicia el iPod (Sleep + Home) para comprobar que la carátula aparece.\n"
++        "Conviene tener un respaldo de la carpeta iTunes_Control/iTunes (ver README).");
++    note->setWordWrap(true);
++    lay->addWidget(note);
++
++    auto* rbImage = new QRadioButton("Elegir una imagen (JPG, PNG, WEBP…):", &dlg);
++    rbImage->setChecked(true);
++    auto* imgRow = new QHBoxLayout();
++    auto* imgLabel = new QLabel("(ninguna elegida)", &dlg);
++    imgLabel->setWordWrap(true);
++    auto* browseBtn = new QPushButton("Examinar…", &dlg);
++    imgRow->addWidget(browseBtn);
++    imgRow->addWidget(imgLabel, 1);
++    auto* rbEmbedded = new QRadioButton("Usar la imagen incrustada en el archivo de cada canción", &dlg);
++    auto* rbRemove = new QRadioButton("Quitar la carátula", &dlg);
++    auto* albumChk = new QCheckBox("Aplicar también a las demás canciones de los mismos álbumes", &dlg);
++    lay->addWidget(rbImage);
++    lay->addLayout(imgRow);
++    lay->addWidget(rbEmbedded);
++    lay->addWidget(rbRemove);
++    lay->addWidget(albumChk);
++    auto* box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
++    lay->addWidget(box);
++
++    QString chosenImage;
++    connect(browseBtn, &QPushButton::clicked, &dlg, [&]() {
++        const QString f = QFileDialog::getOpenFileName(&dlg, "Elegir carátula", QDir::homePath(),
++                                                       "Imágenes (*.jpg *.jpeg *.png *.webp *.bmp *.gif);;Todos los archivos (*)");
++        if (!f.isEmpty()) { chosenImage = f; imgLabel->setText(QFileInfo(f).fileName()); rbImage->setChecked(true); }
++    });
++    connect(rbEmbedded, &QRadioButton::toggled, albumChk, [&](bool on) { albumChk->setEnabled(!on); });
++    connect(box, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
++    connect(box, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
++    if (dlg.exec() != QDialog::Accepted) return;
++
++    if (rbImage->isChecked() && chosenImage.isEmpty()) {
++        QMessageBox::information(this, "Falta la imagen", "Elige una imagen con «Examinar…».");
++        return;
++    }
++
++    // Canciones a las que se aplica: las marcadas (+ las de los mismos albumes si se pidio)
++    QList<Track> targets = sel;
++    if (albumChk->isChecked() && !rbEmbedded->isChecked()) {
++        auto isUnknown = [](const QString& a) {
++            const QString l = a.trimmed().toLower();
++            return l.isEmpty() || l.contains("desconocido") || l.contains("unknown");
++        };
++        QSet<QString> albums;
++        for (const Track& t : sel) if (!isUnknown(t.album)) albums.insert(t.album.trimmed().toLower());
++        QSet<uint64_t> have;
++        for (const Track& t : targets) have.insert(t.dbid);
++        const auto pls = m_currentDevice->playlists();
++        for (const Playlist& pl : pls) {
++            if (!pl.isMaster) continue;
++            for (const Track& t : pl.tracks)
++                if (t.dbid && !have.contains(t.dbid) && albums.contains(t.album.trimmed().toLower())) {
++                    targets.append(t); have.insert(t.dbid);
++                }
++            break;
++        }
++    }
++
++    QTemporaryDir tmp;
++    if (!tmp.isValid()) { QMessageBox::warning(this, "Error", "No se pudo crear una carpeta temporal."); return; }
++
++    QList<IpodTouchBridge::ArtworkEdit> edits;
++    int noCover = 0;
++    QProgressDialog prog("Preparando carátulas...", "Cancelar", 0, targets.size(), this);
++    prog.setWindowModality(Qt::WindowModal);
++    prog.setMinimumDuration(400);
++
++    if (rbRemove->isChecked()) {
++        for (const Track& t : targets) edits.append({t.dbid, "-"});
++    } else if (rbImage->isChecked()) {
++        const QString cover = tmp.filePath("cover.jpg");
++        if (!IpodTouchBridge::prepareCoverImage(chosenImage, cover)) {
++            QMessageBox::warning(this, "Imagen no válida",
++                "No se pudo leer esa imagen (¿está instalado ffmpeg?). Prueba con otra o con un JPG/PNG.");
++            return;
++        }
++        for (const Track& t : targets) edits.append({t.dbid, cover});
++    } else {
++        int n = 0;
++        for (const Track& t : targets) {
++            prog.setValue(n);
++            if (prog.wasCanceled()) return;
++            const QString phys = ITunesDBReader::resolvePhysicalPath(m_currentDevice->mountPath(), t.filePath);
++            const QString out = tmp.filePath(QString("c%1.jpg").arg(n++));
++            if (QFileInfo::exists(phys) && IpodTouchBridge::extractEmbeddedCover(phys, out))
++                edits.append({t.dbid, out});
++            else
++                ++noCover;
++        }
++    }
++    prog.setValue(targets.size());
++
++    if (edits.isEmpty()) {
++        QMessageBox::information(this, "Sin cambios",
++            "Ninguna de las canciones tiene una imagen incrustada que se pueda usar.");
++        return;
++    }
++
++    const int savedPlaylistIndex = m_currentPlaylistIndex;
++    QString err;
++    int updated = 0;
++    QApplication::setOverrideCursor(Qt::WaitCursor);
++    const bool ok = IpodTouchBridge::setArtwork(m_currentDevice->mountPath(), edits, &err, &updated);
++    QApplication::restoreOverrideCursor();
++
++    m_currentDevice->loadPlaylists();
++    updateDeviceView();
++    populateTreeOrganizer();
++    selectPlaylistIndex(savedPlaylistIndex);
++
++    if (!ok) {
++        QMessageBox::warning(this, "No se pudo guardar la carátula", err);
++        return;
++    }
++    QString msg = QString("%1 carátulas actualizadas. Reinicia el iPod (Sleep + Home) para verlas en la app Música.").arg(updated);
++    if (noCover > 0) msg += QString(" (%1 canciones no tenían imagen incrustada.)").arg(noCover);
++    if (!err.isEmpty()) msg += "\n\n" + err;
++    statusBar()->showMessage(msg);
++    QMessageBox::information(this, "Carátulas", msg);
++}
++
+ void MainWindow::onEditSelectedTracks() {
+     if (!m_currentDevice || !IpodTouchBridge::isTouchLayout(m_currentDevice->mountPath())) {
+         QMessageBox::information(this, "Aviso", "Esta función está disponible para iPod Touch.");
+diff -ruN '--exclude=.git' chk5/src/ui/MainWindow.h work/src/ui/MainWindow.h
+--- a/src/ui/MainWindow.h	2026-10-20 23:20:24.817892630 +0000
++++ b/src/ui/MainWindow.h	2026-10-20 23:32:33.944193071 +0000
+@@ -31,6 +31,7 @@
+     void onEjectDevice();
+     void onAddTracks();
+     void onEditSelectedTracks();
++    void onEditArtwork();
+     void onTreeItemClicked(QTreeWidgetItem* item, int column);
+     void onTreeItemChanged(QTreeWidgetItem* item, int column);
+     void onTreeContextMenu(const QPoint& pos);
+@@ -100,6 +101,7 @@
+     QPushButton* m_selectAllBtn{nullptr};
+     QPushButton* m_deleteBtn{nullptr};
+     QPushButton* m_editTagsBtn{nullptr};
++    QPushButton* m_artBtn{nullptr};
+     QTableView* m_trackTable{nullptr};
+     TrackTableModel* m_trackModel{nullptr};
+ 
+diff -ruN '--exclude=.git' chk5/tools/ipod/gestor.c work/tools/ipod/gestor.c
+--- a/tools/ipod/gestor.c	2026-10-20 23:20:24.817914006 +0000
++++ b/tools/ipod/gestor.c	2026-10-20 23:31:48.334831326 +0000
+@@ -58,10 +58,11 @@
+             "  %s <mountpoint> addmany      (lee stdin: archivo TAB titulo TAB artista TAB dur_ms TAB album TAB genero TAB bitrate TAB anio TAB pista)\n"
+             "  %s <mountpoint> del <dbid> [dbid ...]\n"
+             "  %s <mountpoint> settags      (lee stdin: dbid TAB titulo TAB artista TAB album TAB dur_ms; campo vacio = no cambiar)\n"
++            "  %s <mountpoint> setart       (lee stdin: dbid TAB imagen.jpg  |  dbid TAB -  para quitar la caratula)\n"
+             "  %s <mountpoint> plnew <nombre>\n"
+             "  %s <mountpoint> plrename <nombre_actual> <nombre_nuevo>\n"
+             "  %s <mountpoint> pldel <nombre> [nombre ...]\n"
+-            "  (addmany acepta un nombre de lista opcional: addmany <lista>)\n", argv[0], argv[0], argv[0], argv[0], argv[0], argv[0], argv[0], argv[0]);
++            "  (addmany acepta un nombre de lista opcional: addmany <lista>)\n", argv[0], argv[0], argv[0], argv[0], argv[0], argv[0], argv[0], argv[0], argv[0]);
+         return 1;
+     }
+     const char *mp = argv[1];
+@@ -193,6 +194,53 @@
+             printf("UPDATED\t%s\n", c[0]);
+             fflush(stdout);
+             cambiados++;
++        }
++        if (cambiados > 0) guardar(db);
++        printf("RESUMEN\t%d\t%d\n", cambiados, fallos);
++        fflush(stdout);
++        itdb_free(db);
++        return cambiados > 0 ? 0 : 1;
++
++    } else if (!strcmp(cmd, "setart")) {
++        if (!itdb_device_supports_artwork(db->device)) {
++            fprintf(stderr, "Error: este dispositivo no admite caratulas (falta SysInfoExtended?)\n");
++            return 1;
++        }
++        char linea[8192];
++        int cambiados = 0, fallos = 0;
++        while (fgets(linea, sizeof linea, stdin)) {
++            size_t len = strlen(linea);
++            while (len && (linea[len-1] == '\n' || linea[len-1] == '\r')) linea[--len] = '\0';
++            if (!len) continue;
++
++            char *c[2] = {0};
++            int nc = separar_tabs(linea, c, 2);
++            guint64 id = g_ascii_strtoull(c[0], NULL, 10);
++            Itdb_Track *t = NULL;
++            if (id) {
++                for (GList *l = db->tracks; l; l = l->next)
++                    if (((Itdb_Track *)l->data)->dbid == id) { t = l->data; break; }
++            }
++            if (!t) {
++                printf("FAIL\t%s\tno existe una cancion con ese id\n", c[0]);
++                fflush(stdout); fallos++;
++                continue;
++            }
++            if (nc < 2 || !c[1][0]) {
++                printf("FAIL\t%s\tfalta la imagen\n", c[0]);
++                fflush(stdout); fallos++;
++                continue;
++            }
++            if (!strcmp(c[1], "-")) {
++                itdb_track_remove_thumbnails(t);
++            } else if (!itdb_track_set_thumbnails(t, c[1])) {
++                printf("FAIL\t%s\tno se pudo usar la imagen %s\n", c[0], c[1]);
++                fflush(stdout); fallos++;
++                continue;
++            }
++            printf("UPDATED\t%s\n", c[0]);
++            fflush(stdout);
++            cambiados++;
+         }
+         if (cambiados > 0) guardar(db);
+         printf("RESUMEN\t%d\t%d\n", cambiados, fallos);

@@ -44,6 +44,8 @@ set(IPOP_SOURCES
     src/ui/MainWindow.cpp
     src/ui/DeleteProgressDialog.h
     src/ui/DeleteProgressDialog.cpp
+    src/ui/MetadataEditDialog.h
+    src/ui/MetadataEditDialog.cpp
     src/core/AudioConverter.h
     src/core/AudioConverter.cpp
     src/core/TrackImporter.h

@@ -57,10 +57,12 @@ int main(int argc, char **argv) {
             "  %s <mountpoint> add <archivo.mp3> [titulo] [artista] [duracion_ms]\n"
             "  %s <mountpoint> addmany      (lee stdin: archivo TAB titulo TAB artista TAB dur_ms TAB album TAB genero TAB bitrate TAB anio TAB pista)\n"
             "  %s <mountpoint> del <dbid> [dbid ...]\n"
+            "  %s <mountpoint> settags      (lee stdin: dbid TAB titulo TAB artista TAB album TAB dur_ms; campo vacio = no cambiar)\n"
+            "  %s <mountpoint> setart       (lee stdin: dbid TAB imagen.jpg  |  dbid TAB -  para quitar la caratula)\n"
             "  %s <mountpoint> plnew <nombre>\n"
             "  %s <mountpoint> plrename <nombre_actual> <nombre_nuevo>\n"
             "  %s <mountpoint> pldel <nombre> [nombre ...]\n"
-            "  (addmany acepta un nombre de lista opcional: addmany <lista>)\n", argv[0], argv[0], argv[0], argv[0], argv[0], argv[0], argv[0]);
+            "  (addmany acepta un nombre de lista opcional: addmany <lista>)\n", argv[0], argv[0], argv[0], argv[0], argv[0], argv[0], argv[0], argv[0], argv[0]);
         return 1;
     }
     const char *mp = argv[1];
@@ -129,7 +131,7 @@ int main(int argc, char **argv) {
             gchar *base = g_path_get_basename(file);
             Itdb_Track *t = itdb_track_new();
             t->title  = g_strdup((nc > 1 && c[1][0]) ? c[1] : base);
-            t->artist = g_strdup((nc > 2 && c[2][0]) ? c[2] : "Desconocido");
+            if (nc > 2 && c[2][0]) t->artist = g_strdup(c[2]);   /* sin artista: se deja vacio */
             t->tracklen = (nc > 3) ? atoi(c[3]) : 0;
             if (nc > 4 && c[4][0]) t->album = g_strdup(c[4]);
             if (nc > 5 && c[5][0]) t->genre = g_strdup(c[5]);
@@ -163,6 +165,88 @@ int main(int argc, char **argv) {
         fflush(stdout);
         itdb_free(db);
         return ok > 0 ? 0 : 1;
+
+    } else if (!strcmp(cmd, "settags")) {
+        char linea[8192];
+        int cambiados = 0, fallos = 0;
+        while (fgets(linea, sizeof linea, stdin)) {
+            size_t len = strlen(linea);
+            while (len && (linea[len-1] == '\n' || linea[len-1] == '\r')) linea[--len] = '\0';
+            if (!len) continue;
+
+            char *c[5] = {0};
+            int nc = separar_tabs(linea, c, 5);
+            guint64 id = g_ascii_strtoull(c[0], NULL, 10);
+            Itdb_Track *t = NULL;
+            if (id) {
+                for (GList *l = db->tracks; l; l = l->next)
+                    if (((Itdb_Track *)l->data)->dbid == id) { t = l->data; break; }
+            }
+            if (!t) {
+                printf("FAIL\t%s\tno existe una cancion con ese id\n", c[0]);
+                fflush(stdout); fallos++;
+                continue;
+            }
+            if (nc > 1 && c[1][0]) { g_free(t->title);  t->title  = g_strdup(c[1]); g_free(t->sort_title);  t->sort_title  = NULL; }
+            if (nc > 2 && c[2][0]) { g_free(t->artist); t->artist = g_strdup(c[2]); g_free(t->sort_artist); t->sort_artist = NULL; }
+            if (nc > 3 && c[3][0]) { g_free(t->album);  t->album  = g_strdup(c[3]); g_free(t->sort_album);  t->sort_album  = NULL; }
+            if (nc > 4 && atoi(c[4]) > 0) t->tracklen = atoi(c[4]);
+            printf("UPDATED\t%s\n", c[0]);
+            fflush(stdout);
+            cambiados++;
+        }
+        if (cambiados > 0) guardar(db);
+        printf("RESUMEN\t%d\t%d\n", cambiados, fallos);
+        fflush(stdout);
+        itdb_free(db);
+        return cambiados > 0 ? 0 : 1;
+
+    } else if (!strcmp(cmd, "setart")) {
+        if (!itdb_device_supports_artwork(db->device)) {
+            fprintf(stderr, "Error: este dispositivo no admite caratulas (falta SysInfoExtended?)\n");
+            return 1;
+        }
+        char linea[8192];
+        int cambiados = 0, fallos = 0;
+        while (fgets(linea, sizeof linea, stdin)) {
+            size_t len = strlen(linea);
+            while (len && (linea[len-1] == '\n' || linea[len-1] == '\r')) linea[--len] = '\0';
+            if (!len) continue;
+
+            char *c[2] = {0};
+            int nc = separar_tabs(linea, c, 2);
+            guint64 id = g_ascii_strtoull(c[0], NULL, 10);
+            Itdb_Track *t = NULL;
+            if (id) {
+                for (GList *l = db->tracks; l; l = l->next)
+                    if (((Itdb_Track *)l->data)->dbid == id) { t = l->data; break; }
+            }
+            if (!t) {
+                printf("FAIL\t%s\tno existe una cancion con ese id\n", c[0]);
+                fflush(stdout); fallos++;
+                continue;
+            }
+            if (nc < 2 || !c[1][0]) {
+                printf("FAIL\t%s\tfalta la imagen\n", c[0]);
+                fflush(stdout); fallos++;
+                continue;
+            }
+            if (!strcmp(c[1], "-")) {
+                itdb_track_remove_thumbnails(t);
+            } else if (!itdb_track_set_thumbnails(t, c[1])) {
+                printf("FAIL\t%s\tno se pudo usar la imagen %s\n", c[0], c[1]);
+                fflush(stdout); fallos++;
+                continue;
+            }
+            printf("UPDATED\t%s\n", c[0]);
+            fflush(stdout);
+            cambiados++;
+        }
+        if (cambiados > 0) guardar(db);
+        printf("RESUMEN\t%d\t%d\n", cambiados, fallos);
+        fflush(stdout);
+        itdb_free(db);
+        return cambiados > 0 ? 0 : 1;
 
     } else if (!strcmp(cmd, "plnew") && argc >= 4) {
         if (!argv[3][0] || itdb_playlist_by_name(db, argv[3])) {

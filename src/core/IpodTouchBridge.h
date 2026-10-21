@@ -2,7 +2,9 @@
 
 #include <QString>
 #include <QList>
+#include <QHash>
 #include <functional>
+#include "Track.h"
 
 // Puente hacia las herramientas de tools/ipod (gestor + nochmod.so + openssl-legacy.cnf).
 // Se usa con iPod Touch / iOS 4: la biblioteca vive en iTunesCDB + "iTunes Library.itlp"
@@ -25,7 +27,35 @@ public:
                           ProgressCb progressCb = nullptr,
                           QString* errorMsg = nullptr,
                           int* addedCount = nullptr,
-                          const QString& playlistName = QString());
+                          const QString& playlistName = QString(),
+                          const QHash<QString, Track>& metadata = QHash<QString, Track>());
+
+    // Cambios de datos de canciones ya existentes (campo vacio / 0 = no cambiar)
+    struct TrackEdit {
+        uint64_t dbid{0};
+        QString title;
+        QString artist;
+        QString album;
+        int durationMs{0};
+    };
+    static bool updateTracks(const QString& mountPath, const QList<TrackEdit>& edits,
+                             QString* errorMsg = nullptr, int* updatedCount = nullptr);
+
+    // Caratulas: imagePath = ruta a una imagen, o "-" para quitar la caratula de esa cancion
+    struct ArtworkEdit {
+        uint64_t dbid{0};
+        QString imagePath;
+    };
+    static bool setArtwork(const QString& mountPath, const QList<ArtworkEdit>& edits,
+                           QString* errorMsg = nullptr, int* updatedCount = nullptr);
+
+    // Convierte cualquier imagen a un JPEG cuadrado de 600x600 (con ffmpeg). Devuelve true si lo logra.
+    static bool prepareCoverImage(const QString& sourceImage, const QString& outJpg);
+    // Extrae la caratula incrustada de un archivo de audio (mp3/m4a) a un JPEG cuadrado. false si no tiene.
+    static bool extractEmbeddedCover(const QString& audioFile, const QString& outJpg);
+
+    // Ultimo mensaje informativo/de error de addTracks (resumen, avisos de audio repetido, detalle del fallo)
+    static QString lastMessage();
 
     // Borra por dbid (cancion + archivo mp3) en una sola escritura. Todo o nada si un id no existe.
     static bool deleteTracks(const QString& mountPath,

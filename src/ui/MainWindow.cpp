@@ -22,7 +22,18 @@
 #include <QUrl>
 #include <QDirIterator>
 #include "DeleteProgressDialog.h"
+#include "MetadataEditDialog.h"
+#include <QProgressDialog>
 #include <QDialog>
+#include <QFormLayout>
+#include <QLineEdit>
+#include <QCheckBox>
+#include <QDialogButtonBox>
+#include <QSet>
+#include <QRadioButton>
+#include <QTemporaryDir>
+#include <QLabel>
+#include <QFileInfo>
 #include <QDoubleSpinBox>
 #include <QProgressBar>
 #include "../core/AudioConverter.h"
@@ -362,6 +373,27 @@ void MainWindow::setupUi() {
     connect(m_selectAllBtn, &QPushButton::clicked, this, &MainWindow::onToggleSelectAll);
     songsHeaderRow->addWidget(m_selectAllBtn);
 
+    m_editTagsBtn = new QPushButton("✏️ Editar artista / duración", this);
+    m_editTagsBtn->setEnabled(false);
+    m_editTagsBtn->setToolTip("Cambia el artista o álbum de las canciones marcadas, o recalcula su duración leyendo el archivo (iPod Touch).");
+    m_editTagsBtn->setStyleSheet(
+        "QPushButton { "
+        "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #FDFDFD, stop:0.5 #EDEDED, stop:0.51 #E0E0E0, stop:1 #D0D0D0); "
+        "  border: 1px solid #8E949C; border-radius: 4px; padding: 4px 12px; font-size: 11px; font-weight: bold; color: #2E3338; "
+        "} "
+        "QPushButton:hover { background: #FFFFFF; border-color: #6A7078; } "
+        "QPushButton:disabled { background: #E2E5E8; color: #989EA6; border-color: #CCD0D6; }"
+    );
+    connect(m_editTagsBtn, &QPushButton::clicked, this, &MainWindow::onEditSelectedTracks);
+    songsHeaderRow->addWidget(m_editTagsBtn);
+
+    m_artBtn = new QPushButton("🖼️ Carátula", this);
+    m_artBtn->setEnabled(false);
+    m_artBtn->setToolTip("Cambia o quita la carátula de las canciones marcadas (iPod Touch).");
+    m_artBtn->setStyleSheet(m_editTagsBtn->styleSheet());
+    connect(m_artBtn, &QPushButton::clicked, this, &MainWindow::onEditArtwork);
+    songsHeaderRow->addWidget(m_artBtn);
+
     m_deleteBtn = new QPushButton("Eliminar seleccionadas", this);
     m_deleteBtn->setEnabled(false);
     m_deleteBtn->setStyleSheet(
@@ -668,9 +700,15 @@ void MainWindow::onSelectionChanged(int selectedCount) {
     if (selectedCount > 0) {
         m_deleteBtn->setEnabled(true);
         m_deleteBtn->setText(QString("Eliminar seleccionadas (%1)").arg(selectedCount));
+        if (m_editTagsBtn)
+            m_editTagsBtn->setEnabled(m_currentDevice && IpodTouchBridge::isTouchLayout(m_currentDevice->mountPath()));
+        if (m_artBtn)
+            m_artBtn->setEnabled(m_currentDevice && IpodTouchBridge::isTouchLayout(m_currentDevice->mountPath()));
     } else {
         m_deleteBtn->setEnabled(false);
         m_deleteBtn->setText("Eliminar seleccionadas");
+        if (m_editTagsBtn) m_editTagsBtn->setEnabled(false);
+        if (m_artBtn) m_artBtn->setEnabled(false);
         m_allSelected = false;
         m_selectAllBtn->setText("Seleccionar todas");
     }
@@ -976,6 +1014,253 @@ void MainWindow::onPlayerPrevTrack() {
     m_trackTable->selectRow(prevIdx);
 }
 
+void MainWindow::onEditArtwork() {
+    if (!m_currentDevice || !IpodTouchBridge::isTouchLayout(m_currentDevice->mountPath())) {
+        QMessageBox::information(this, "Aviso", "Esta función está disponible para iPod Touch.");
+        return;
+    }
+    const QList<uint32_t> ids = m_trackModel->selectedTrackIds();
+    if (ids.isEmpty()) return;
+    const QSet<uint32_t> idSet(ids.begin(), ids.end());
+    QList<Track> sel;
+    for (const Track& t : m_activeTracks)
+        if (idSet.contains(t.id) && t.dbid != 0) sel.append(t);
+    if (sel.isEmpty()) return;
+
+    QDialog dlg(this);
+    dlg.setWindowTitle(QString("Carátula de %1 canción(es)").arg(sel.size()));
+    auto* lay = new QVBoxLayout(&dlg);
+    auto* note = new QLabel(
+        "Prueba primero con UNA canción y reinicia el iPod (Sleep + Home) para comprobar que la carátula aparece.\n"
+        "Conviene tener un respaldo de la carpeta iTunes_Control/iTunes (ver README).");
+    note->setWordWrap(true);
+    lay->addWidget(note);
+
+    auto* rbImage = new QRadioButton("Elegir una imagen (JPG, PNG, WEBP…):", &dlg);
+    rbImage->setChecked(true);
+    auto* imgRow = new QHBoxLayout();
+    auto* imgLabel = new QLabel("(ninguna elegida)", &dlg);
+    imgLabel->setWordWrap(true);
+    auto* browseBtn = new QPushButton("Examinar…", &dlg);
+    imgRow->addWidget(browseBtn);
+    imgRow->addWidget(imgLabel, 1);
+    auto* rbEmbedded = new QRadioButton("Usar la imagen incrustada en el archivo de cada canción", &dlg);
+    auto* rbRemove = new QRadioButton("Quitar la carátula", &dlg);
+    auto* albumChk = new QCheckBox("Aplicar también a las demás canciones de los mismos álbumes", &dlg);
+    lay->addWidget(rbImage);
+    lay->addLayout(imgRow);
+    lay->addWidget(rbEmbedded);
+    lay->addWidget(rbRemove);
+    lay->addWidget(albumChk);
+    auto* box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    lay->addWidget(box);
+
+    QString chosenImage;
+    connect(browseBtn, &QPushButton::clicked, &dlg, [&]() {
+        const QString f = QFileDialog::getOpenFileName(&dlg, "Elegir carátula", QDir::homePath(),
+                                                       "Imágenes (*.jpg *.jpeg *.png *.webp *.bmp *.gif);;Todos los archivos (*)");
+        if (!f.isEmpty()) { chosenImage = f; imgLabel->setText(QFileInfo(f).fileName()); rbImage->setChecked(true); }
+    });
+    connect(rbEmbedded, &QRadioButton::toggled, albumChk, [&](bool on) { albumChk->setEnabled(!on); });
+    connect(box, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(box, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    if (dlg.exec() != QDialog::Accepted) return;
+
+    if (rbImage->isChecked() && chosenImage.isEmpty()) {
+        QMessageBox::information(this, "Falta la imagen", "Elige una imagen con «Examinar…».");
+        return;
+    }
+
+    // Canciones a las que se aplica: las marcadas (+ las de los mismos albumes si se pidio)
+    QList<Track> targets = sel;
+    if (albumChk->isChecked() && !rbEmbedded->isChecked()) {
+        auto isUnknown = [](const QString& a) {
+            const QString l = a.trimmed().toLower();
+            return l.isEmpty() || l.contains("desconocido") || l.contains("unknown");
+        };
+        QSet<QString> albums;
+        for (const Track& t : sel) if (!isUnknown(t.album)) albums.insert(t.album.trimmed().toLower());
+        QSet<uint64_t> have;
+        for (const Track& t : targets) have.insert(t.dbid);
+        const auto pls = m_currentDevice->playlists();
+        for (const Playlist& pl : pls) {
+            if (!pl.isMaster) continue;
+            for (const Track& t : pl.tracks)
+                if (t.dbid && !have.contains(t.dbid) && albums.contains(t.album.trimmed().toLower())) {
+                    targets.append(t); have.insert(t.dbid);
+                }
+            break;
+        }
+    }
+
+    QTemporaryDir tmp;
+    if (!tmp.isValid()) { QMessageBox::warning(this, "Error", "No se pudo crear una carpeta temporal."); return; }
+
+    QList<IpodTouchBridge::ArtworkEdit> edits;
+    int noCover = 0;
+    QProgressDialog prog("Preparando carátulas...", "Cancelar", 0, targets.size(), this);
+    prog.setWindowModality(Qt::WindowModal);
+    prog.setMinimumDuration(400);
+
+    if (rbRemove->isChecked()) {
+        for (const Track& t : targets) edits.append({t.dbid, "-"});
+    } else if (rbImage->isChecked()) {
+        const QString cover = tmp.filePath("cover.jpg");
+        if (!IpodTouchBridge::prepareCoverImage(chosenImage, cover)) {
+            QMessageBox::warning(this, "Imagen no válida",
+                "No se pudo leer esa imagen (¿está instalado ffmpeg?). Prueba con otra o con un JPG/PNG.");
+            return;
+        }
+        for (const Track& t : targets) edits.append({t.dbid, cover});
+    } else {
+        int n = 0;
+        for (const Track& t : targets) {
+            prog.setValue(n);
+            if (prog.wasCanceled()) return;
+            const QString phys = ITunesDBReader::resolvePhysicalPath(m_currentDevice->mountPath(), t.filePath);
+            const QString out = tmp.filePath(QString("c%1.jpg").arg(n++));
+            if (QFileInfo::exists(phys) && IpodTouchBridge::extractEmbeddedCover(phys, out))
+                edits.append({t.dbid, out});
+            else
+                ++noCover;
+        }
+    }
+    prog.setValue(targets.size());
+
+    if (edits.isEmpty()) {
+        QMessageBox::information(this, "Sin cambios",
+            "Ninguna de las canciones tiene una imagen incrustada que se pueda usar.");
+        return;
+    }
+
+    const int savedPlaylistIndex = m_currentPlaylistIndex;
+    QString err;
+    int updated = 0;
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    const bool ok = IpodTouchBridge::setArtwork(m_currentDevice->mountPath(), edits, &err, &updated);
+    QApplication::restoreOverrideCursor();
+
+    m_currentDevice->loadPlaylists();
+    updateDeviceView();
+    populateTreeOrganizer();
+    selectPlaylistIndex(savedPlaylistIndex);
+
+    if (!ok) {
+        QMessageBox::warning(this, "No se pudo guardar la carátula", err);
+        return;
+    }
+    QString msg = QString("%1 carátulas actualizadas. Reinicia el iPod (Sleep + Home) para verlas en la app Música.").arg(updated);
+    if (noCover > 0) msg += QString(" (%1 canciones no tenían imagen incrustada.)").arg(noCover);
+    if (!err.isEmpty()) msg += "\n\n" + err;
+    statusBar()->showMessage(msg);
+    QMessageBox::information(this, "Carátulas", msg);
+}
+
+void MainWindow::onEditSelectedTracks() {
+    if (!m_currentDevice || !IpodTouchBridge::isTouchLayout(m_currentDevice->mountPath())) {
+        QMessageBox::information(this, "Aviso", "Esta función está disponible para iPod Touch.");
+        return;
+    }
+    const QList<uint32_t> ids = m_trackModel->selectedTrackIds();
+    if (ids.isEmpty()) return;
+    const QSet<uint32_t> idSet(ids.begin(), ids.end());
+    QList<Track> sel;
+    for (const Track& t : m_activeTracks)
+        if (idSet.contains(t.id)) sel.append(t);
+    if (sel.isEmpty()) return;
+
+    auto isUnknown = [](const QString& a) {
+        const QString l = a.trimmed().toLower();
+        return l.isEmpty() || l.contains("desconocido") || l.contains("unknown");
+    };
+
+    // Si todas comparten un artista conocido, mostrarlo como valor inicial
+    QString commonArtist = sel.first().artist;
+    for (const Track& t : sel) if (t.artist != commonArtist) { commonArtist.clear(); break; }
+    if (isUnknown(commonArtist)) commonArtist.clear();
+
+    QDialog dlg(this);
+    dlg.setWindowTitle(QString("Editar %1 canción(es)").arg(sel.size()));
+    auto* form = new QFormLayout(&dlg);
+    auto* artistEdit = new QLineEdit(commonArtist, &dlg);
+    artistEdit->setPlaceholderText("Dejar vacío para no cambiarlo");
+    auto* albumEdit = new QLineEdit(&dlg);
+    albumEdit->setPlaceholderText("Dejar vacío para no cambiarlo");
+    auto* autoChk = new QCheckBox("Si falta el artista, tomarlo del título («Artista - Título»)", &dlg);
+    autoChk->setChecked(true);
+    auto* durChk = new QCheckBox("Recalcular la duración leyendo cada archivo", &dlg);
+    durChk->setChecked(true);
+    auto* box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    form->addRow("Artista:", artistEdit);
+    form->addRow("Álbum:", albumEdit);
+    form->addRow(autoChk);
+    form->addRow(durChk);
+    form->addRow(box);
+    connect(box, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(box, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    if (dlg.exec() != QDialog::Accepted) return;
+
+    const QString manualArtist = artistEdit->text().trimmed();
+    const QString manualAlbum = albumEdit->text().trimmed();
+
+    // Calcular qué cambia en cada canción
+    QList<IpodTouchBridge::TrackEdit> edits;
+    QProgressDialog prog("Analizando canciones...", "Cancelar", 0, sel.size(), this);
+    prog.setWindowModality(Qt::WindowModal);
+    prog.setMinimumDuration(400);
+    int n = 0;
+    for (const Track& t : sel) {
+        prog.setValue(n++);
+        if (prog.wasCanceled()) return;
+        if (t.dbid == 0) continue;
+
+        IpodTouchBridge::TrackEdit e;
+        e.dbid = t.dbid;
+        bool changed = false;
+
+        if (!manualArtist.isEmpty()) {
+            if (t.artist != manualArtist) { e.artist = manualArtist; changed = true; }
+        } else if (autoChk->isChecked() && isUnknown(t.artist)) {
+            QString a, ti;
+            if (AudioConverter::splitArtistTitle(t.title, a, ti)) { e.artist = a; e.title = ti; changed = true; }
+        }
+        if (!manualAlbum.isEmpty() && t.album != manualAlbum) { e.album = manualAlbum; changed = true; }
+
+        if (durChk->isChecked() && !t.filePath.isEmpty()) {
+            const QString phys = ITunesDBReader::resolvePhysicalPath(m_currentDevice->mountPath(), t.filePath);
+            if (QFileInfo::exists(phys)) {
+                const int real = AudioConverter::extractMetadata(phys).durationMs;
+                if (real > 0 && qAbs(real - t.durationMs) > 1500) { e.durationMs = real; changed = true; }
+            }
+        }
+        if (changed) edits.append(e);
+    }
+    prog.setValue(sel.size());
+
+    if (edits.isEmpty()) {
+        QMessageBox::information(this, "Sin cambios", "No hay nada que cambiar en las canciones marcadas.");
+        return;
+    }
+
+    const int savedPlaylistIndex = m_currentPlaylistIndex;
+    QString err;
+    int updated = 0;
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    const bool ok = IpodTouchBridge::updateTracks(m_currentDevice->mountPath(), edits, &err, &updated);
+    QApplication::restoreOverrideCursor();
+
+    m_currentDevice->loadPlaylists();
+    updateDeviceView();
+    populateTreeOrganizer();
+    selectPlaylistIndex(savedPlaylistIndex);
+
+    if (!ok) {
+        QMessageBox::warning(this, "No se pudo guardar", err);
+        return;
+    }
+    statusBar()->showMessage(QString("%1 canciones actualizadas. Reinicia el iPod (Sleep + Home) para verlas en la app Música.").arg(updated));
+}
+
 void MainWindow::onAddTracks() {
     if (!m_currentDevice || !m_currentDevice->isValid()) {
         QMessageBox::information(this, "Aviso", "Conecta o selecciona un iPod primero.");
@@ -1156,6 +1441,34 @@ void MainWindow::handleDroppedFiles(const QStringList& filePaths) {
         return;
     }
 
+    // iPod Touch: leer titulo/artista/duracion reales y dejar que el usuario los revise o edite
+    QHash<QString, Track> metaOverrides;
+    if (isTouch) {
+        QList<Track> tracks;
+        {
+            QProgressDialog pd("Leyendo metadatos de las canciones...", "Cancelar", 0, filesToImport.size(), this);
+            pd.setWindowModality(Qt::WindowModal);
+            pd.setMinimumDuration(0);
+            for (int i = 0; i < filesToImport.size(); ++i) {
+                pd.setValue(i);
+                if (pd.wasCanceled()) return;
+                tracks.append(AudioConverter::extractMetadata(filesToImport.at(i)));
+            }
+            pd.setValue(filesToImport.size());
+        }
+        bool missingArtist = false;
+        for (const Track& t : tracks) {
+            if (t.artist.isEmpty()) { missingArtist = true; break; }
+        }
+        if (MetadataEditDialog::alwaysReview() || missingArtist) {
+            MetadataEditDialog dlg(filesToImport, tracks, this);
+            if (dlg.exec() != QDialog::Accepted) return;
+            tracks = dlg.tracks();
+        }
+        for (int i = 0; i < filesToImport.size(); ++i)
+            metaOverrides.insert(QFileInfo(filesToImport.at(i)).absoluteFilePath(), tracks.at(i));
+    }
+
     uint64_t totalBytes = 0;
     for (const auto& f : filesToImport) {
         totalBytes += QFileInfo(f).size();
@@ -1188,7 +1501,8 @@ void MainWindow::handleDroppedFiles(const QStringList& filePaths) {
             Q_UNUSED(totBytes);
             importDlg->updateProgress(curBytes, status);
         },
-        targetPlaylist
+        targetPlaylist,
+        metaOverrides
     );
 
     importDlg->setComplete("¡Canciones transferidas con éxito!");
@@ -1209,13 +1523,20 @@ void MainWindow::handleDroppedFiles(const QStringList& filePaths) {
                     "La base de datos iTunesDB ha sido sincronizada y las canciones están listas para reproducirse.\n\n"
                     "En iPod Touch: reinicia el iPod (Sleep + Home hasta ver el logo) para que aparezcan en la app Música.")
                 .arg(filesToImport.size()).arg(m_currentDevice->modelName())
+            + (isTouch && IpodTouchBridge::lastMessage().contains("AVISO")
+                   ? "\n\n" + IpodTouchBridge::lastMessage().section("AVISO", 1).prepend("AVISO") : QString())
         );
     } else {
-        QMessageBox::warning(
-            this,
-            "Error al transferir",
-            "No se pudieron transferir los archivos o actualizar la base de datos iTunesDB en el iPod."
-        );
+        QString detail = "No se pudieron transferir los archivos o actualizar la base de datos iTunesDB en el iPod.";
+        if (isTouch && !IpodTouchBridge::lastMessage().isEmpty()) {
+            detail += "\n\n" + IpodTouchBridge::lastMessage();
+            // Pudo quedar a medias: recargar para mostrar lo que SI se añadió
+            m_currentDevice->loadPlaylists();
+            m_currentDevice->refreshStorageBreakdown();
+            updateDeviceView();
+            populateTreeOrganizer();
+        }
+        QMessageBox::warning(this, "Error al transferir", detail);
     }
 }
 
@@ -1497,6 +1818,12 @@ void MainWindow::onNewPlaylist() {
     if (!ok) return;
     name = name.trimmed();
     if (name.isEmpty()) return;
+
+    // Evita crear dos veces la misma lista si se vuelve a disparar la accion mientras se escribe en el iPod
+    static bool creating = false;
+    if (creating) return;
+    creating = true;
+    struct Reset { bool& f; ~Reset() { f = false; } } resetGuard{creating};
 
     QString errorMsg;
     if (m_currentDevice->createPlaylist(name, &errorMsg)) {

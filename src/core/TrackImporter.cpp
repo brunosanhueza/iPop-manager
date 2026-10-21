@@ -154,7 +154,8 @@ bool TrackImporter::importTracksToDevice(
     const QString& firewireGuid,
     const QList<QString>& sourceFilePaths,
     std::function<void(int current, int total, uint64_t currentBytes, uint64_t totalBytes, const QString& status)> progressCb,
-    const QString& playlistName
+    const QString& playlistName,
+    const QHash<QString, Track>& metadata
 ) {
     if (sourceFilePaths.isEmpty() || mountPath.isEmpty()) return false;
 
@@ -162,7 +163,7 @@ bool TrackImporter::importTracksToDevice(
     if (IpodTouchBridge::isTouchLayout(mountPath)) {
         QString err;
         int added = 0;
-        const bool ok = IpodTouchBridge::addTracks(mountPath, sourceFilePaths, progressCb, &err, &added, playlistName);
+        const bool ok = IpodTouchBridge::addTracks(mountPath, sourceFilePaths, progressCb, &err, &added, playlistName, metadata);
         if (!ok || !err.isEmpty()) qWarning() << "IpodTouchBridge::addTracks:" << err;
         return ok;
     }
